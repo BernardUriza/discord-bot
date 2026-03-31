@@ -85,6 +85,9 @@ class MemoryStore:
 
     async def close(self):
         if self._db:
+            # Checkpoint WAL to merge journal into main DB file before closing.
+            # Critical for Azure backup: upload_db reads the main file only.
+            await self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             await self._db.close()
             self._db = None
             log.info("memory_closed")

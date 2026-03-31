@@ -46,6 +46,16 @@ async def download_db(db_path: Path) -> bool:
             try:
                 stream = await blob.download_blob()
                 data = await stream.readall()
+
+                # Don't overwrite a local DB that already has data with an empty/smaller blob
+                if db_path.exists() and db_path.stat().st_size > len(data):
+                    log.warning(
+                        "azure_download_skipped_larger_local",
+                        local_size=db_path.stat().st_size,
+                        blob_size=len(data),
+                    )
+                    return False
+
                 db_path.parent.mkdir(parents=True, exist_ok=True)
                 db_path.write_bytes(data)
                 log.info("azure_db_downloaded", size=len(data), path=str(db_path))
