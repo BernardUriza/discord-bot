@@ -75,6 +75,9 @@ async def download_db(db_path: Path) -> bool:
 async def upload_db(db_path: Path) -> bool:
     """Upload memory.db to Azure Blob Storage.
 
+    Creates a consistent snapshot via SQLite backup API (safe even with WAL mode),
+    then uploads the snapshot. This avoids issues with WAL journal not being flushed.
+
     Returns True if uploaded, False if not configured or failed.
     """
     if not is_azure_configured():
@@ -85,16 +88,30 @@ async def upload_db(db_path: Path) -> bool:
         return False
 
     try:
+        import sqlite3
+
         from azure.storage.blob.aio import BlobServiceClient
+
+        # Create a consistent snapshot using SQLite backup API
+        # This merges WAL into a single file — safe while DB is open
+        snapshot_path = db_path.parent / "memory_backup.db"
+        src = sqlite3.connect(str(db_path))
+        dst = sqlite3.connect(str(snapshot_path))
+        src.backup(dst)
+        src.close()
+        dst.close()
 
         conn_str = os.environ["AZURE_STORAGE_CONNECTION_STRING"]
         async with BlobServiceClient.from_connection_string(conn_str) as client:
             container = client.get_container_client(CONTAINER_NAME)
             blob = container.get_blob_client(BLOB_NAME)
 
-            data = db_path.read_bytes()
+            data = snapshot_path.read_bytes()
             await blob.upload_blob(data, overwrite=True)
             log.info("azure_db_uploaded", size=len(data), blob=BLOB_NAME)
+
+            # Cleanup snapshot
+            snapshot_path.unlink(missing_ok=True)
             return True
 
     except ImportError:
