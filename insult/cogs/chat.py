@@ -36,6 +36,8 @@ class ChatCog(commands.Cog):
         self.bot = container.bot
         self._cooldowns: dict[int, float] = {}
         self._background_tasks: set[asyncio.Task] = set()
+        self._processed_messages: set[int] = set()  # dedup: prevent double responses
+        self._processed_max = 1000  # rotate after this many to prevent memory leak
 
     def _check_cooldown(self, user_id: int) -> float:
         """Returns 0 if ready, or seconds remaining."""
@@ -53,6 +55,15 @@ class ChatCog(commands.Cog):
         # Ignore bots (including ourselves)
         if message.author.bot:
             return
+
+        # Dedup: prevent double responses from gateway replays or reconnects
+        if message.id in self._processed_messages:
+            return
+        self._processed_messages.add(message.id)
+        if len(self._processed_messages) > self._processed_max:
+            # Discard oldest half to prevent memory leak
+            to_keep = sorted(self._processed_messages)[self._processed_max // 2 :]
+            self._processed_messages = set(to_keep)
 
         # Ignore other commands (!ping, !memoria, !buscar, !perfil, !chat)
         if message.content.startswith(self.settings.command_prefix):
