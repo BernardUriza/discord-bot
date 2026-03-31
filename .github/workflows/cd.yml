@@ -1,0 +1,37 @@
+name: CD
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  deploy:
+    name: Build & Deploy to Azure
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Build & Push to ACR
+        run: |
+          az acr build \
+            --registry insultacr \
+            --resource-group insult-rg \
+            --image insult-bot:${{ github.sha }} \
+            --image insult-bot:latest \
+            .
+
+      - name: Deploy to Container Apps
+        run: |
+          az containerapp update \
+            --name insult-bot \
+            --resource-group insult-rg \
+            --image insultacr.azurecr.io/insult-bot:${{ github.sha }}

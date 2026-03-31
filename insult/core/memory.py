@@ -1,6 +1,6 @@
 """Memoria longitudinal con SQLite async.
 
-Sin sesiones: una conversacion infinita por canal.
+Per-user context: each user has their own conversation with Insult.
 Contexto jerarquico: reciente + relevante (keyword match).
 Append-only: nunca se borra, solo crece.
 """
@@ -32,12 +32,27 @@ class MemoryStore:
                 user_name TEXT NOT NULL,
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
-                timestamp REAL NOT NULL
+                timestamp REAL NOT NULL,
+                for_user_id TEXT
             )
         """)
+        # Migration: add for_user_id if upgrading from old schema
+        try:
+            await self._db.execute("ALTER TABLE messages ADD COLUMN for_user_id TEXT")
+        except aiosqlite.OperationalError:
+            pass  # column already exists
+
         await self._db.execute("""
             CREATE INDEX IF NOT EXISTS idx_channel_ts
             ON messages(channel_id, timestamp DESC)
+        """)
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_context
+            ON messages(channel_id, user_id, timestamp DESC)
+        """)
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_for_user
+            ON messages(channel_id, for_user_id, timestamp DESC)
         """)
         await self._db.execute("""
             CREATE TABLE IF NOT EXISTS user_profiles (
@@ -68,45 +83,72 @@ class MemoryStore:
         user_name: str,
         role: str,
         content: str,
+        for_user_id: str | None = None,
     ):
-        """Guarda un mensaje en la memoria longitudinal."""
+        """Guarda un mensaje en la memoria longitudinal.
+
+        Args:
+            for_user_id: For assistant messages, the user_id this reply is for.
+                         Enables per-user context isolation.
+        """
         await self._ensure_connection()
         try:
             await self._db.execute(
-                "INSERT INTO messages (channel_id, user_id, user_name, role, content, timestamp) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (channel_id, user_id, user_name, role, content, time.time()),
+                "INSERT INTO messages (channel_id, user_id, user_name, role, content, timestamp, for_user_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (channel_id, user_id, user_name, role, content, time.time(), for_user_id),
             )
             await self._db.commit()
         except aiosqlite.Error as e:
             log.error("memory_store_failed", channel_id=channel_id, user_id=user_id, error=str(e))
             raise
 
-    async def get_recent(self, channel_id: str, limit: int = 20) -> list[dict]:
-        """Ultimos N mensajes del canal."""
+    async def get_recent(self, channel_id: str, limit: int = 20, user_id: str | None = None) -> list[dict]:
+        """Ultimos N mensajes del canal, opcionalmente filtrados por usuario.
+
+        When user_id is provided, returns only:
+        - Messages sent BY that user
+        - Assistant replies TO that user (for_user_id match)
+        """
         await self._ensure_connection()
-        cursor = await self._db.execute(
-            "SELECT user_name, role, content, timestamp FROM messages "
-            "WHERE channel_id = ? ORDER BY timestamp DESC LIMIT ?",
-            (channel_id, limit),
-        )
+        if user_id:
+            cursor = await self._db.execute(
+                "SELECT user_name, role, content, timestamp FROM messages "
+                "WHERE channel_id = ? AND (user_id = ? OR for_user_id = ?) "
+                "ORDER BY timestamp DESC LIMIT ?",
+                (channel_id, user_id, user_id, limit),
+            )
+        else:
+            cursor = await self._db.execute(
+                "SELECT user_name, role, content, timestamp FROM messages "
+                "WHERE channel_id = ? ORDER BY timestamp DESC LIMIT ?",
+                (channel_id, limit),
+            )
         rows = await cursor.fetchall()
         return [{"user_name": r[0], "role": r[1], "content": r[2], "timestamp": r[3]} for r in reversed(rows)]
 
-    async def search(self, channel_id: str, query: str, limit: int = 5) -> list[dict]:
-        """Busca mensajes relevantes por keywords (cross-session)."""
+    async def search(self, channel_id: str, query: str, limit: int = 5, user_id: str | None = None) -> list[dict]:
+        """Busca mensajes relevantes por keywords, opcionalmente filtrados por usuario."""
         await self._ensure_connection()
         words = [f"%{w}%" for w in query.split() if len(w) > 2]
         if not words:
             return []
 
         conditions = " OR ".join(["content LIKE ?"] * len(words))
-        cursor = await self._db.execute(
-            f"SELECT user_name, role, content, timestamp FROM messages "  # noqa: S608
-            f"WHERE channel_id = ? AND ({conditions}) "
-            f"ORDER BY timestamp DESC LIMIT ?",
-            (channel_id, *words, limit),
-        )
+        if user_id:
+            cursor = await self._db.execute(
+                f"SELECT user_name, role, content, timestamp FROM messages "  # noqa: S608
+                f"WHERE channel_id = ? AND (user_id = ? OR for_user_id = ?) AND ({conditions}) "
+                f"ORDER BY timestamp DESC LIMIT ?",
+                (channel_id, user_id, user_id, *words, limit),
+            )
+        else:
+            cursor = await self._db.execute(
+                f"SELECT user_name, role, content, timestamp FROM messages "  # noqa: S608
+                f"WHERE channel_id = ? AND ({conditions}) "
+                f"ORDER BY timestamp DESC LIMIT ?",
+                (channel_id, *words, limit),
+            )
         rows = await cursor.fetchall()
         return [{"user_name": r[0], "role": r[1], "content": r[2], "timestamp": r[3]} for r in reversed(rows)]
 

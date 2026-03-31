@@ -8,6 +8,7 @@ from discord.ext import commands, tasks
 
 from insult.app import Container, create_app
 from insult.cogs import ChatCog, UtilityCog
+from insult.core.backup import download_db, is_azure_configured, upload_db
 from insult.core.errors import get_error_response
 
 log = structlog.get_logger()
@@ -22,7 +23,10 @@ def _build(container: Container):
     async def graceful_shutdown(sig: signal.Signals):
         log.info("shutdown_signal", signal=sig.name)
         _health_check.cancel()
+        if _backup_task.is_running():
+            _backup_task.cancel()
         await memory.close()
+        await upload_db(container.settings.db_path)
         await bot.close()
         log.info("shutdown_complete")
 
@@ -30,6 +34,17 @@ def _build(container: Container):
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(graceful_shutdown(s)))
+
+    # --- Azure Backup (every 10 min) ---
+    @tasks.loop(minutes=10)
+    async def _backup_task():
+        if is_azure_configured():
+            try:
+                await memory.close()
+                await upload_db(container.settings.db_path)
+                await memory.connect()
+            except Exception:
+                log.exception("azure_backup_failed")
 
     # --- Health Check ---
     @tasks.loop(seconds=60)
@@ -52,12 +67,17 @@ def _build(container: Container):
     @bot.event
     async def on_ready():
         nonlocal _ready_fired
+        # Download DB from Azure on first startup (if configured)
+        if not _ready_fired and is_azure_configured():
+            await download_db(container.settings.db_path)
         await memory.connect()
         if not _ready_fired:
             _bind_signals()
             await bot.add_cog(ChatCog(container))
             await bot.add_cog(UtilityCog(container))
             _health_check.start()
+            if is_azure_configured():
+                _backup_task.start()
             _ready_fired = True
         log.info(
             "bot_ready",

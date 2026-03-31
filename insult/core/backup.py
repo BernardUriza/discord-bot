@@ -1,0 +1,95 @@
+"""Azure Blob Storage backup for SQLite database.
+
+Optional: only activates if AZURE_STORAGE_CONNECTION_STRING is set.
+Downloads DB on startup, uploads on shutdown + periodic backup.
+"""
+
+import os
+from pathlib import Path
+
+import structlog
+
+log = structlog.get_logger()
+
+CONTAINER_NAME = "insult-bot"
+BLOB_NAME = "memory.db"
+
+
+def is_azure_configured() -> bool:
+    """Check if Azure Blob Storage credentials are available."""
+    return bool(os.environ.get("AZURE_STORAGE_CONNECTION_STRING"))
+
+
+async def download_db(db_path: Path) -> bool:
+    """Download memory.db from Azure Blob Storage if it exists.
+
+    Returns True if downloaded, False if not found or not configured.
+    """
+    if not is_azure_configured():
+        return False
+
+    try:
+        from azure.storage.blob.aio import BlobServiceClient
+
+        conn_str = os.environ["AZURE_STORAGE_CONNECTION_STRING"]
+        async with BlobServiceClient.from_connection_string(conn_str) as client:
+            container = client.get_container_client(CONTAINER_NAME)
+
+            # Create container if it doesn't exist
+            try:
+                await container.create_container()
+                log.info("azure_container_created", container=CONTAINER_NAME)
+            except Exception:
+                pass  # already exists
+
+            blob = container.get_blob_client(BLOB_NAME)
+            try:
+                stream = await blob.download_blob()
+                data = await stream.readall()
+                db_path.parent.mkdir(parents=True, exist_ok=True)
+                db_path.write_bytes(data)
+                log.info("azure_db_downloaded", size=len(data), path=str(db_path))
+                return True
+            except Exception:
+                log.info("azure_db_not_found", blob=BLOB_NAME)
+                return False
+
+    except ImportError:
+        log.warning("azure_sdk_not_installed", hint="pip install azure-storage-blob")
+        return False
+    except Exception:
+        log.exception("azure_download_failed")
+        return False
+
+
+async def upload_db(db_path: Path) -> bool:
+    """Upload memory.db to Azure Blob Storage.
+
+    Returns True if uploaded, False if not configured or failed.
+    """
+    if not is_azure_configured():
+        return False
+
+    if not db_path.exists():
+        log.warning("azure_upload_skipped", reason="db file does not exist")
+        return False
+
+    try:
+        from azure.storage.blob.aio import BlobServiceClient
+
+        conn_str = os.environ["AZURE_STORAGE_CONNECTION_STRING"]
+        async with BlobServiceClient.from_connection_string(conn_str) as client:
+            container = client.get_container_client(CONTAINER_NAME)
+            blob = container.get_blob_client(BLOB_NAME)
+
+            data = db_path.read_bytes()
+            await blob.upload_blob(data, overwrite=True)
+            log.info("azure_db_uploaded", size=len(data), blob=BLOB_NAME)
+            return True
+
+    except ImportError:
+        log.warning("azure_sdk_not_installed", hint="pip install azure-storage-blob")
+        return False
+    except Exception:
+        log.exception("azure_upload_failed")
+        return False
