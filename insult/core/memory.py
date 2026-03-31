@@ -87,7 +87,14 @@ class MemoryStore:
         if self._db:
             # Checkpoint WAL to merge journal into main DB file before closing.
             # Critical for Azure backup: upload_db reads the main file only.
-            await self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            try:
+                await self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception:
+                log.warning("wal_checkpoint_failed_retrying_passive")
+                try:
+                    await self._db.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                except Exception:
+                    log.warning("wal_checkpoint_passive_also_failed")
             await self._db.close()
             self._db = None
             log.info("memory_closed")

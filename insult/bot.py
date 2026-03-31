@@ -40,9 +40,12 @@ def _build(container: Container):
     async def _backup_task():
         if is_azure_configured():
             try:
-                await memory.close()
+                # Checkpoint WAL without closing — safe while DB is in use
+                import contextlib
+
+                with contextlib.suppress(Exception):
+                    await memory._db.execute("PRAGMA wal_checkpoint(PASSIVE)")
                 await upload_db(container.settings.db_path)
-                await memory.connect()
             except Exception:
                 log.exception("azure_backup_failed")
 
