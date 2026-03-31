@@ -5,6 +5,10 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    # Discord
+    discord_token: str = ""
+    command_prefix: str = "!"
+
     # Anthropic
     anthropic_api_key: str = ""
     llm_model: str = "claude-sonnet-4-20250514"
