@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import structlog
 from discord.ext import commands
 
+from insult.core.attachments import process_attachments
 from insult.core.character import build_adaptive_prompt
 from insult.core.errors import classify_error, get_error_response
 
@@ -37,6 +38,14 @@ class ChatCog(commands.Cog):
         user_id = str(ctx.author.id)
         user_name = ctx.author.display_name
 
+        # Process attachments (images, text files, PDFs)
+        attachment_blocks = []
+        if ctx.message.attachments:
+            blocks, errors = await process_attachments(ctx.message.attachments)
+            attachment_blocks = blocks
+            for err in errors:
+                await ctx.send(err)
+
         try:
             await self.memory.store(channel_id, user_id, user_name, "user", message)
         except Exception:
@@ -57,6 +66,14 @@ class ChatCog(commands.Cog):
             log.exception("chat_context_failed", channel_id=channel_id)
             await ctx.send(get_error_response("context_failed"))
             return
+
+        # Inject attachment content blocks into the last user message
+        if attachment_blocks and context:
+            last_msg = context[-1]
+            if last_msg["role"] == "user":
+                # Convert text-only message to multimodal content blocks
+                text_block = {"type": "text", "text": last_msg["content"]}
+                context[-1] = {"role": "user", "content": [text_block, *attachment_blocks]}
 
         # Build adaptive system prompt: base persona + user style + identity reinforcement
         system_prompt = build_adaptive_prompt(self.settings.system_prompt, profile, len(context))
