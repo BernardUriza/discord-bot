@@ -26,6 +26,7 @@ MESSAGE_DELIMITER = "[SEND]"
 TYPING_CHARS_PER_SECOND = 50  # ~250 CPM, fast mobile typing speed
 MIN_TYPING_DELAY = 0.8
 MAX_TYPING_DELAY = 5.0
+VERSION_TAG = "ᵇᵉᵗᵃ ᵛ⁰·³"  # superscript unicode — visible but unobtrusive
 
 
 class ChatCog(commands.Cog):
@@ -174,11 +175,15 @@ class ChatCog(commands.Cog):
         # Send as multiple messages with typing delay if LLM used [SEND] delimiter
         parts = [p.strip() for p in response.split(MESSAGE_DELIMITER) if p.strip()]
         for i, part in enumerate(parts):
-            # Chunk each part to respect Discord's 2000 char limit
-            for chunk in [part[j : j + 1990] for j in range(0, len(part), 1990)]:
+            # Append version tag to the very last chunk of the last part
+            is_last_part = i == len(parts) - 1
+            chunks = [part[j : j + 1990] for j in range(0, len(part), 1990)]
+            for ci, chunk in enumerate(chunks):
+                if is_last_part and ci == len(chunks) - 1:
+                    chunk += f"\n-# {VERSION_TAG}"
                 await message.channel.send(chunk)
             # Typing delay between parts (not after the last one)
-            if i < len(parts) - 1:
+            if not is_last_part:
                 next_part = parts[i + 1]
                 delay = max(MIN_TYPING_DELAY, min(len(next_part) / TYPING_CHARS_PER_SECOND, MAX_TYPING_DELAY))
                 async with message.channel.typing():
