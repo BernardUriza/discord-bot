@@ -214,8 +214,32 @@ class MemoryStore:
             log.info("memory_cleaned", deleted=count, cutoff=cutoff)
         return count
 
+    @staticmethod
+    def _format_relative_time(timestamp: float) -> str:
+        """Convert Unix timestamp to human-readable relative time."""
+        now = time.time()
+        diff = now - timestamp
+
+        if diff < 60:
+            return "justo ahora"
+        if diff < 3600:
+            mins = int(diff / 60)
+            return f"hace {mins}min"
+        if diff < 86400:
+            hours = int(diff / 3600)
+            return f"hace {hours}h"
+        days = int(diff / 86400)
+        if days == 1:
+            return "ayer"
+        if days < 7:
+            return f"hace {days} días"
+        if days < 30:
+            weeks = int(days / 7)
+            return f"hace {weeks} sem"
+        return f"hace {int(days / 30)} meses"
+
     def build_context(self, recent: list[dict], relevant: list[dict] | None = None) -> list[dict]:
-        """Construye el contexto para el LLM: reciente + relevante."""
+        """Construye el contexto para el LLM: reciente + relevante (con timestamps)."""
         context = []
 
         if relevant:
@@ -226,12 +250,16 @@ class MemoryStore:
                     {
                         "role": "user",
                         "content": "[Contexto relevante de conversaciones anteriores]\n"
-                        + "\n".join(f"{m['user_name']}: {m['content']}" for m in unique_relevant),
+                        + "\n".join(
+                            f"[{self._format_relative_time(m['timestamp'])}] {m['user_name']}: {m['content']}"
+                            for m in unique_relevant
+                        ),
                     }
                 )
 
         for msg in recent:
-            content = f"{msg['user_name']}: {msg['content']}" if msg["role"] == "user" else msg["content"]
+            ts = f"[{self._format_relative_time(msg['timestamp'])}] "
+            content = f"{ts}{msg['user_name']}: {msg['content']}" if msg["role"] == "user" else f"{ts}{msg['content']}"
             context.append({"role": msg["role"], "content": content})
 
         return context

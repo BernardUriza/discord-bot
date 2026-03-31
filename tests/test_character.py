@@ -83,14 +83,18 @@ class TestSanitize:
 class TestBuildAdaptivePrompt:
     BASE_PROMPT = "You are Insult."
 
-    def test_no_profile_returns_base(self):
+    def test_no_profile_has_base_and_time(self):
         result = build_adaptive_prompt(self.BASE_PROMPT, None, 5)
-        assert result == self.BASE_PROMPT
+        assert result.startswith(self.BASE_PROMPT)
+        assert "Current Time" in result
+        assert "User Adaptation" not in result
 
-    def test_not_confident_returns_base(self):
+    def test_not_confident_has_base_and_time_only(self):
         profile = UserStyleProfile(message_count=3)
         result = build_adaptive_prompt(self.BASE_PROMPT, profile, 5)
-        assert result == self.BASE_PROMPT
+        assert result.startswith(self.BASE_PROMPT)
+        assert "Current Time" in result
+        assert "User Adaptation" not in result
 
     def test_confident_english_user(self):
         profile = UserStyleProfile(detected_language="en", message_count=10)
