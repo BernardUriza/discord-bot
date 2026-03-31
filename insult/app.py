@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 import discord
 from discord.ext import commands
 
@@ -14,6 +15,7 @@ from insult.core.memory import MemoryStore
 @dataclass
 class Container:
     """Holds all app dependencies. Passed to cogs via constructor injection."""
+
     settings: Settings
     memory: MemoryStore
     llm: LLMClient

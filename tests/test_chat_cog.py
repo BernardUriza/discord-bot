@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from insult.cogs.chat import ChatCog, MAX_MESSAGE_LENGTH
+from insult.cogs.chat import MAX_MESSAGE_LENGTH, ChatCog
 
 
 class TestChatCog:
@@ -40,9 +40,7 @@ class TestChatCog:
     async def test_updates_user_profile(self, cog, mock_ctx):
         cog.llm.chat = AsyncMock(return_value="respuesta")
         await self._call_chat(cog, mock_ctx, "hola wey")
-        cog.memory.update_profile.assert_called_once_with(
-            str(mock_ctx.author.id), "hola wey"
-        )
+        cog.memory.update_profile.assert_called_once_with(str(mock_ctx.author.id), "hola wey")
 
     async def test_sends_llm_response(self, cog, mock_ctx):
         cog.llm.chat = AsyncMock(return_value="Eres un pendejo.")

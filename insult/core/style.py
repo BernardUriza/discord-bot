@@ -10,65 +10,233 @@ import re
 # --- Language detection via stopwords ---
 
 LANG_STOPWORDS = {
-    "es": {"de", "la", "el", "en", "que", "los", "las", "por", "con", "una",
-           "para", "del", "es", "se", "no", "un", "su", "al", "lo", "como",
-           "más", "pero", "sus", "le", "ya", "o", "fue", "este", "ha", "sí",
-           "porque", "esta", "son", "entre", "está", "cuando", "muy", "sin",
-           "sobre", "ser", "también", "me", "hasta", "hay", "donde", "han",
-           "quien", "están", "desde", "todo", "nos", "ni", "ese", "eso"},
-    "en": {"the", "is", "at", "in", "on", "and", "or", "to", "of", "for",
-           "it", "was", "are", "be", "has", "had", "have", "with", "this",
-           "that", "from", "but", "not", "you", "all", "can", "her", "his",
-           "one", "our", "out", "do", "if", "my", "no", "up", "so", "an"},
+    "es": {
+        "de",
+        "la",
+        "el",
+        "en",
+        "que",
+        "los",
+        "las",
+        "por",
+        "con",
+        "una",
+        "para",
+        "del",
+        "es",
+        "se",
+        "no",
+        "un",
+        "su",
+        "al",
+        "lo",
+        "como",
+        "más",
+        "pero",
+        "sus",
+        "le",
+        "ya",
+        "o",
+        "fue",
+        "este",
+        "ha",
+        "sí",
+        "porque",
+        "esta",
+        "son",
+        "entre",
+        "está",
+        "cuando",
+        "muy",
+        "sin",
+        "sobre",
+        "ser",
+        "también",
+        "me",
+        "hasta",
+        "hay",
+        "donde",
+        "han",
+        "quien",
+        "están",
+        "desde",
+        "todo",
+        "nos",
+        "ni",
+        "ese",
+        "eso",
+    },
+    "en": {
+        "the",
+        "is",
+        "at",
+        "in",
+        "on",
+        "and",
+        "or",
+        "to",
+        "of",
+        "for",
+        "it",
+        "was",
+        "are",
+        "be",
+        "has",
+        "had",
+        "have",
+        "with",
+        "this",
+        "that",
+        "from",
+        "but",
+        "not",
+        "you",
+        "all",
+        "can",
+        "her",
+        "his",
+        "one",
+        "our",
+        "out",
+        "do",
+        "if",
+        "my",
+        "no",
+        "up",
+        "so",
+        "an",
+    },
 }
 
 # --- Formality markers ---
 
 INFORMAL_ES = {
-    "wey", "we", "güey", "neta", "nmms", "chale", "chido", "verga", "pedo",
-    "mames", "jaja", "jeje", "xd", "ntp", "xfa", "arre", "nel", "simon",
-    "orale", "órale", "cabrón", "cabron", "chingón", "pues", "nah", "uy",
-    "onda", "rollo", "morro", "morrita", "compa", "carnal", "banda",
-    "pendejo", "pendeja", "pinche", "culero", "mamón", "mamon", "fregón",
+    "wey",
+    "we",
+    "güey",
+    "neta",
+    "nmms",
+    "chale",
+    "chido",
+    "verga",
+    "pedo",
+    "mames",
+    "jaja",
+    "jeje",
+    "xd",
+    "ntp",
+    "xfa",
+    "arre",
+    "nel",
+    "simon",
+    "orale",
+    "órale",
+    "cabrón",
+    "cabron",
+    "chingón",
+    "pues",
+    "nah",
+    "uy",
+    "onda",
+    "rollo",
+    "morro",
+    "morrita",
+    "compa",
+    "carnal",
+    "banda",
+    "pendejo",
+    "pendeja",
+    "pinche",
+    "culero",
+    "mamón",
+    "mamon",
+    "fregón",
 }
 
 INFORMAL_EN = {
-    "lol", "lmao", "tbh", "ngl", "idk", "imo", "btw", "omg", "bruh",
-    "gonna", "wanna", "gotta", "kinda", "sorta", "ya", "yep", "nope",
-    "haha", "hehe", "nah", "dude", "bro", "yo", "cuz", "ain't", "aint",
-    "tho", "tho", "fr", "smh", "fam", "goat", "lit", "sus", "vibe",
+    "lol",
+    "lmao",
+    "tbh",
+    "ngl",
+    "idk",
+    "imo",
+    "btw",
+    "omg",
+    "bruh",
+    "gonna",
+    "wanna",
+    "gotta",
+    "kinda",
+    "sorta",
+    "ya",
+    "yep",
+    "nope",
+    "haha",
+    "hehe",
+    "nah",
+    "dude",
+    "bro",
+    "yo",
+    "cuz",
+    "ain't",
+    "aint",
+    "tho",
+    "fr",
+    "smh",
+    "fam",
+    "goat",
+    "lit",
+    "sus",
+    "vibe",
 }
 
 INFORMAL_MARKERS = INFORMAL_ES | INFORMAL_EN
 
 FORMAL_MARKERS = {
-    "therefore", "however", "furthermore", "additionally", "regarding",
-    "consequently", "nevertheless", "accordingly", "whereas", "moreover",
-    "por lo tanto", "sin embargo", "además", "respecto", "estimado",
-    "atentamente", "mediante", "conforme", "solicito", "agradecer",
+    "therefore",
+    "however",
+    "furthermore",
+    "additionally",
+    "regarding",
+    "consequently",
+    "nevertheless",
+    "accordingly",
+    "whereas",
+    "moreover",
+    "por lo tanto",
+    "sin embargo",
+    "además",
+    "respecto",
+    "estimado",
+    "atentamente",
+    "mediante",
+    "conforme",
+    "solicito",
+    "agradecer",
 }
 
 # --- Technical detection ---
 
 TECH_PATTERNS = [
-    re.compile(r'\b(api|sdk|sql|json|http|tcp|dns|ssh|git|npm|pip|docker|k8s|aws|gcp)\b', re.I),
-    re.compile(r'\b(function|class|import|return|async|await|def|const|var|let|void|int|str|bool)\b', re.I),
-    re.compile(r'```'),
-    re.compile(r'\b\w+\(\)'),
-    re.compile(r'\b(server|database|deploy|endpoint|backend|frontend|runtime|middleware|webhook)\b', re.I),
-    re.compile(r'\b(framework|library|dependency|module|package|repository|branch|commit|merge)\b', re.I),
+    re.compile(r"\b(api|sdk|sql|json|http|tcp|dns|ssh|git|npm|pip|docker|k8s|aws|gcp)\b", re.I),
+    re.compile(r"\b(function|class|import|return|async|await|def|const|var|let|void|int|str|bool)\b", re.I),
+    re.compile(r"```"),
+    re.compile(r"\b\w+\(\)"),
+    re.compile(r"\b(server|database|deploy|endpoint|backend|frontend|runtime|middleware|webhook)\b", re.I),
+    re.compile(r"\b(framework|library|dependency|module|package|repository|branch|commit|merge)\b", re.I),
 ]
 
 # --- Emoji detection ---
 
 EMOJI_PATTERN = re.compile(
-    "[\U0001F600-\U0001F64F"
-    "\U0001F300-\U0001F5FF"
-    "\U0001F680-\U0001F6FF"
-    "\U0001F1E0-\U0001F1FF"
-    "\U00002702-\U000027B0"
-    "\U0001F900-\U0001F9FF"
-    "]+", flags=re.UNICODE
+    "[\U0001f600-\U0001f64f"
+    "\U0001f300-\U0001f5ff"
+    "\U0001f680-\U0001f6ff"
+    "\U0001f1e0-\U0001f1ff"
+    "\U00002702-\U000027b0"
+    "\U0001f900-\U0001f9ff"
+    "]+",
+    flags=re.UNICODE,
 )
 
 # EMA smoothing factor — 0.3 means recent messages weigh ~30%
@@ -138,7 +306,7 @@ class UserStyleProfile:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "UserStyleProfile":
+    def from_dict(cls, data: dict) -> UserStyleProfile:
         return cls(
             avg_word_count=data.get("avg_word_count", 15.0),
             emoji_ratio=data.get("emoji_ratio", 0.0),
@@ -152,7 +320,7 @@ class UserStyleProfile:
         return json.dumps(self.to_dict())
 
     @classmethod
-    def from_json(cls, raw: str) -> "UserStyleProfile":
+    def from_json(cls, raw: str) -> UserStyleProfile:
         return cls.from_dict(json.loads(raw))
 
 

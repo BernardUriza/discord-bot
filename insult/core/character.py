@@ -51,7 +51,7 @@ def detect_break(text: str) -> list[str]:
 
 def sanitize(text: str) -> str:
     """Remove sentences that contain character breaks as a last resort."""
-    sentences = re.split(r'(?<=[.!?])\s+', text)
+    sentences = re.split(r"(?<=[.!?])\s+", text)
     clean = [s for s in sentences if not any(p.search(s) for p in CHARACTER_BREAK_PATTERNS)]
     result = " ".join(clean).strip()
     return result if result else text
@@ -73,8 +73,7 @@ def build_adaptive_prompt(base_prompt: str, profile, context_len: int) -> str:
 
         if profile.avg_word_count < 10:
             adaptations.append(
-                "This user is brief. Keep your responses short and punchy — 1-3 sentences. "
-                "Hit hard, hit fast."
+                "This user is brief. Keep your responses short and punchy — 1-3 sentences. Hit hard, hit fast."
             )
         elif profile.avg_word_count > 40:
             adaptations.append(
@@ -84,8 +83,7 @@ def build_adaptive_prompt(base_prompt: str, profile, context_len: int) -> str:
 
         if profile.formality < 0.25:
             adaptations.append(
-                "This user is very casual and uses slang freely. You can go full vulgar — "
-                "they can take it."
+                "This user is very casual and uses slang freely. You can go full vulgar — they can take it."
             )
         elif profile.formality > 0.6:
             adaptations.append(

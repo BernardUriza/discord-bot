@@ -12,9 +12,7 @@ log = structlog.get_logger()
 
 
 class LLMClient:
-    def __init__(
-        self, api_key: str, model: str, max_tokens: int, timeout: float = 30.0, max_retries: int = 5
-    ):
+    def __init__(self, api_key: str, model: str, max_tokens: int, timeout: float = 30.0, max_retries: int = 5):
         self.client = anthropic.AsyncAnthropic(api_key=api_key, timeout=timeout)
         self.model = model
         self.max_tokens = max_tokens
@@ -45,7 +43,7 @@ class LLMClient:
 
             except anthropic.RateLimitError as e:
                 last_error = e
-                wait = 2 ** attempt
+                wait = 2**attempt
                 log.warning("llm_rate_limited", attempt=attempt, wait_seconds=wait)
                 await asyncio.sleep(wait)
 

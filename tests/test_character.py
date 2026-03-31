@@ -1,17 +1,15 @@
 """Tests for insult.core.character — break detection, sanitization, adaptive prompt."""
 
-import pytest
-
 from insult.core.character import (
+    IDENTITY_REINFORCE_THRESHOLD,
     build_adaptive_prompt,
     detect_break,
     sanitize,
-    IDENTITY_REINFORCE_THRESHOLD,
 )
 from insult.core.style import UserStyleProfile
 
-
 # --- Character Break Detection ---
+
 
 class TestDetectBreak:
     def test_clean_response(self):
@@ -53,6 +51,7 @@ class TestDetectBreak:
 
 # --- Sanitization ---
 
+
 class TestSanitize:
     def test_removes_offending_sentence(self):
         text = "Tu codigo esta mal. I'm an AI assistant. Arreglalo."
@@ -79,6 +78,7 @@ class TestSanitize:
 
 
 # --- Build Adaptive Prompt ---
+
 
 class TestBuildAdaptivePrompt:
     BASE_PROMPT = "You are Insult."

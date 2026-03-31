@@ -2,8 +2,8 @@
 
 import asyncio
 
-import typer
 import structlog
+import typer
 
 log = structlog.get_logger()
 app = typer.Typer(help="Insult — Discord bot con memoria longitudinal + Claude API")
@@ -13,6 +13,7 @@ app = typer.Typer(help="Insult — Discord bot con memoria longitudinal + Claude
 def run():
     """Start the Discord bot."""
     from insult.bot import run as bot_run
+
     bot_run()
 
 
@@ -42,6 +43,7 @@ def db_clean(
 ):
     """Clean old messages from memory database."""
     import time
+
     from insult.config import settings
     from insult.core.memory import MemoryStore
 
@@ -50,19 +52,15 @@ def db_clean(
     async def _clean():
         store = MemoryStore(settings.db_path)
         await store.connect()
-        await store._ensure_connection()
-
-        cursor = await store._db.execute(
-            "SELECT COUNT(*) FROM messages WHERE timestamp < ?", (cutoff,)
-        )
-        row = await cursor.fetchone()
-        count = row[0]
 
         if dry_run:
-            typer.echo(f"[DRY RUN] Would delete {count} messages older than {before_days} days")
+            # Preview only — use get_stats-like query without deleting
+            await store._ensure_connection()
+            cursor = await store._db.execute("SELECT COUNT(*) FROM messages WHERE timestamp < ?", (cutoff,))
+            row = await cursor.fetchone()
+            typer.echo(f"[DRY RUN] Would delete {row[0]} messages older than {before_days} days")
         else:
-            await store._db.execute("DELETE FROM messages WHERE timestamp < ?", (cutoff,))
-            await store._db.commit()
+            count = await store.delete_before(cutoff)
             typer.echo(f"Deleted {count} messages older than {before_days} days")
 
         await store.close()

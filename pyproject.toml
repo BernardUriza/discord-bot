@@ -1,0 +1,63 @@
+[project]
+name = "insult"
+version = "0.2.0"
+requires-python = ">=3.14"
+
+[tool.ruff]
+target-version = "py314"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort (import sorting)
+    "N",     # pep8-naming
+    "UP",    # pyupgrade (modern Python patterns)
+    "B",     # flake8-bugbear (common bugs)
+    "S",     # flake8-bandit (security, inline)
+    "A",     # flake8-builtins (shadowing builtins)
+    "C4",    # flake8-comprehensions
+    "SIM",   # flake8-simplify
+    "RUF",   # ruff-specific rules
+]
+ignore = [
+    "S101",  # assert used — fine in tests
+    "S311",  # random — we use it for error response selection, not crypto
+    "E501",  # line too long — handled by formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S106"]  # asserts and hardcoded passwords OK in tests
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["insult"]
+omit = [
+    "insult/__main__.py",  # CLI entry point
+    "insult/bot.py",       # Discord lifecycle (requires real bot)
+    "insult/app.py",       # DI container (requires real deps)
+    "insult/config.py",    # Pydantic settings singleton
+    "insult/core/llm.py",  # API client (integration test territory)
+    "insult/core/memory.py",  # SQLite I/O (integration test territory)
+]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = true
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]
+skips = [
+    "B101",  # assert OK
+    "B311",  # random.choice for error responses, not crypto
+    "B608",  # SQL queries use parameterized ? placeholders
+]

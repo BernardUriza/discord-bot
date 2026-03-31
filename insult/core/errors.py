@@ -2,7 +2,6 @@
 
 import random
 
-
 ERROR_RESPONSES = {
     "timeout": [
         "Se me fue la onda un momento. Preguntame otra vez, andale.",

@@ -8,8 +8,8 @@ import pytest
 
 from insult.core.style import UserStyleProfile
 
-
 # --- Mock Container ---
+
 
 @pytest.fixture
 def mock_memory():
@@ -45,7 +45,7 @@ def mock_settings():
     s.command_prefix = "!"
     s.llm_model = "claude-sonnet-4-20250514"
     s.llm_max_tokens = 1024
-    s.discord_token = "fake-token"
+    s.discord_token = "fake-token"  # noqa: S105
     s.anthropic_api_key = "fake-key"
     return s
 

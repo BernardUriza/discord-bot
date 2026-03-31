@@ -47,18 +47,21 @@ class TestClassifyError:
     def test_timeout_error(self):
         class FakeTimeoutError(Exception):
             pass
+
         FakeTimeoutError.__name__ = "APITimeoutError"
         assert classify_error(FakeTimeoutError()) == "timeout"
 
     def test_rate_limit_error(self):
         class FakeRateLimitError(Exception):
             pass
+
         FakeRateLimitError.__name__ = "RateLimitError"
         assert classify_error(FakeRateLimitError()) == "rate_limit"
 
     def test_auth_error(self):
         class FakeAuthError(Exception):
             pass
+
         FakeAuthError.__name__ = "AuthenticationError"
         assert classify_error(FakeAuthError()) == "auth"
 

@@ -1,10 +1,18 @@
 # Architecture Rules
 
 ## Project Structure
-- `config.py` — Pydantic Settings singleton, all config via .env
-- `core/llm.py` — Claude API client (async), handles retries/timeouts
-- `core/memory.py` — Longitudinal memory (SQLite, append-only, no sessions)
-- `bot.py` — Discord.py entry point with commands
+- `insult/config.py` — Pydantic Settings singleton, all config via .env
+- `insult/app.py` — DI container (Container dataclass), wires all deps
+- `insult/bot.py` — Discord lifecycle, events, signal handling, health check
+- `insult/cogs/chat.py` — !chat command with style adaptation
+- `insult/cogs/utility.py` — !ping, !memoria, !buscar, !perfil commands
+- `insult/core/llm.py` — Claude API client (async) + character break retry
+- `insult/core/memory.py` — Longitudinal memory (SQLite, append-only) + user profiles
+- `insult/core/character.py` — Break detection, sanitization, adaptive prompt building
+- `insult/core/errors.py` — In-character error responses, error classification
+- `insult/core/style.py` — User style profiling (EMA, language, formality, tech level)
+- `persona.md` — System prompt for the Insult persona
+- `tests/` — pytest suite (unit + cog tests with mocked DI container)
 
 ## Patterns (from SerenityOps + free-intelligence/aurity.io)
 - Settings singleton with Pydantic BaseSettings (env_file=".env")

@@ -7,19 +7,40 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  # --- Layer 1: Lint & Format (fastest, runs first) ---
+  lint:
+    name: Ruff Lint & Format
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.14"]
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python 3.14
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.14"
+          allow-prereleases: true
+
+      - name: Install ruff
+        run: pip install ruff>=0.11.0
+
+      - name: Ruff lint
+        run: ruff check --output-format=github .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+  # --- Layer 2: Unit Tests + Coverage ---
+  test:
+    name: Tests + Coverage
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
           allow-prereleases: true
 
       - name: Install dependencies
@@ -27,22 +48,47 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Lint (syntax check)
-        run: |
-          python -m py_compile insult/__init__.py
-          python -m py_compile insult/__main__.py
-          python -m py_compile insult/app.py
-          python -m py_compile insult/bot.py
-          python -m py_compile insult/config.py
-          python -m py_compile insult/core/__init__.py
-          python -m py_compile insult/core/character.py
-          python -m py_compile insult/core/errors.py
-          python -m py_compile insult/core/llm.py
-          python -m py_compile insult/core/memory.py
-          python -m py_compile insult/core/style.py
-          python -m py_compile insult/cogs/__init__.py
-          python -m py_compile insult/cogs/chat.py
-          python -m py_compile insult/cogs/utility.py
+      - name: Run tests with coverage
+        run: pytest -v --tb=short --cov --cov-fail-under=80 --cov-report=term-missing:skip-covered
 
-      - name: Run tests
-        run: pytest -v --tb=short
+  # --- Layer 3: Security — Dependency Audit ---
+  security-deps:
+    name: Dependency Audit (pip-audit)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          allow-prereleases: true
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run pip-audit
+        run: pip-audit
+
+  # --- Layer 4: Security — Static Code Analysis ---
+  security-code:
+    name: Code Security (bandit)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          allow-prereleases: true
+
+      - name: Install bandit
+        run: pip install bandit>=1.8.0
+
+      - name: Run bandit
+        run: bandit -r insult/ -c pyproject.toml

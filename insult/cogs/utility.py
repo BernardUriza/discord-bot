@@ -42,19 +42,26 @@ class UtilityCog(commands.Cog):
 
         lang = "espanol" if profile.detected_language == "es" else "ingles"
         formality_desc = (
-            "hablas como camionero" if profile.formality < 0.25
-            else "eres medio formal" if profile.formality < 0.6
+            "hablas como camionero"
+            if profile.formality < 0.25
+            else "eres medio formal"
+            if profile.formality < 0.6
             else "hablas como si fueras a una entrevista de trabajo"
         )
         tech_desc = (
-            "no sabes ni que es una variable" if profile.technical_level < 0.2
-            else "sabes lo basico" if profile.technical_level < 0.5
-            else "le sabes al codigo" if profile.technical_level < 0.7
+            "no sabes ni que es una variable"
+            if profile.technical_level < 0.2
+            else "sabes lo basico"
+            if profile.technical_level < 0.5
+            else "le sabes al codigo"
+            if profile.technical_level < 0.7
             else "eres un nerd de los pesados"
         )
         verbose_desc = (
-            "escribes telegrama" if profile.avg_word_count < 10
-            else "escribes normal" if profile.avg_word_count < 30
+            "escribes telegrama"
+            if profile.avg_word_count < 10
+            else "escribes normal"
+            if profile.avg_word_count < 30
             else "escribes biblias"
         )
 

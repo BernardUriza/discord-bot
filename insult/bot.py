@@ -29,9 +29,7 @@ def _build(container: Container):
     def _bind_signals():
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(
-                sig, lambda s=sig: asyncio.create_task(graceful_shutdown(s))
-            )
+            loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(graceful_shutdown(s)))
 
     # --- Health Check ---
     @tasks.loop(seconds=60)
@@ -49,13 +47,18 @@ def _build(container: Container):
             log.exception("health_check_failed")
 
     # --- Events ---
+    _ready_fired = False
+
     @bot.event
     async def on_ready():
+        nonlocal _ready_fired
         await memory.connect()
-        _bind_signals()
-        await bot.add_cog(ChatCog(container))
-        await bot.add_cog(UtilityCog(container))
-        _health_check.start()
+        if not _ready_fired:
+            _bind_signals()
+            await bot.add_cog(ChatCog(container))
+            await bot.add_cog(UtilityCog(container))
+            _health_check.start()
+            _ready_fired = True
         log.info(
             "bot_ready",
             user=str(bot.user),

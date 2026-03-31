@@ -91,10 +91,7 @@ class MemoryStore:
             (channel_id, limit),
         )
         rows = await cursor.fetchall()
-        return [
-            {"user_name": r[0], "role": r[1], "content": r[2], "timestamp": r[3]}
-            for r in reversed(rows)
-        ]
+        return [{"user_name": r[0], "role": r[1], "content": r[2], "timestamp": r[3]} for r in reversed(rows)]
 
     async def search(self, channel_id: str, query: str, limit: int = 5) -> list[dict]:
         """Busca mensajes relevantes por keywords (cross-session)."""
@@ -105,16 +102,13 @@ class MemoryStore:
 
         conditions = " OR ".join(["content LIKE ?"] * len(words))
         cursor = await self._db.execute(
-            f"SELECT user_name, role, content, timestamp FROM messages "
+            f"SELECT user_name, role, content, timestamp FROM messages "  # noqa: S608
             f"WHERE channel_id = ? AND ({conditions}) "
             f"ORDER BY timestamp DESC LIMIT ?",
             (channel_id, *words, limit),
         )
         rows = await cursor.fetchall()
-        return [
-            {"user_name": r[0], "role": r[1], "content": r[2], "timestamp": r[3]}
-            for r in reversed(rows)
-        ]
+        return [{"user_name": r[0], "role": r[1], "content": r[2], "timestamp": r[3]} for r in reversed(rows)]
 
     async def get_stats(self, channel_id: str | None = None) -> dict:
         """Estadisticas de la memoria."""
@@ -166,6 +160,18 @@ class MemoryStore:
 
         return profile
 
+    async def delete_before(self, cutoff: float) -> int:
+        """Delete messages older than cutoff timestamp. Returns count deleted."""
+        await self._ensure_connection()
+        cursor = await self._db.execute("SELECT COUNT(*) FROM messages WHERE timestamp < ?", (cutoff,))
+        row = await cursor.fetchone()
+        count = row[0]
+        if count > 0:
+            await self._db.execute("DELETE FROM messages WHERE timestamp < ?", (cutoff,))
+            await self._db.commit()
+            log.info("memory_cleaned", deleted=count, cutoff=cutoff)
+        return count
+
     def build_context(self, recent: list[dict], relevant: list[dict] | None = None) -> list[dict]:
         """Construye el contexto para el LLM: reciente + relevante."""
         context = []
@@ -178,12 +184,12 @@ class MemoryStore:
                     {
                         "role": "user",
                         "content": "[Contexto relevante de conversaciones anteriores]\n"
-                        + "\n".join(f'{m["user_name"]}: {m["content"]}' for m in unique_relevant),
+                        + "\n".join(f"{m['user_name']}: {m['content']}" for m in unique_relevant),
                     }
                 )
 
         for msg in recent:
-            content = f'{msg["user_name"]}: {msg["content"]}' if msg["role"] == "user" else msg["content"]
+            content = f"{msg['user_name']}: {msg['content']}" if msg["role"] == "user" else msg["content"]
             context.append({"role": msg["role"], "content": content})
 
         return context

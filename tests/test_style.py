@@ -9,8 +9,8 @@ from insult.core.style import (
     _detect_language,
 )
 
-
 # --- Language Detection ---
+
 
 class TestDetectLanguage:
     def test_spanish_text(self):
@@ -31,6 +31,7 @@ class TestDetectLanguage:
 
 
 # --- Formality ---
+
 
 class TestFormality:
     def test_casual_spanish(self):
@@ -56,6 +57,7 @@ class TestFormality:
 
 # --- Technical Level ---
 
+
 class TestTechnicalLevel:
     def test_non_technical(self):
         score = _compute_technical_level("me gusta el helado de chocolate")
@@ -75,6 +77,7 @@ class TestTechnicalLevel:
 
 
 # --- UserStyleProfile ---
+
 
 class TestUserStyleProfile:
     def test_default_values(self):
