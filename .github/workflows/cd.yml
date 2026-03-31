@@ -35,3 +35,4 @@ jobs:
             --name insult-bot \
             --resource-group insult-rg \
             --image insultacr.azurecr.io/insult-bot:${{ github.sha }}
+# 2026-03-31T08:25:54Z
