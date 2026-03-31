@@ -22,6 +22,10 @@ log = structlog.get_logger()
 
 MAX_MESSAGE_LENGTH = 4000
 COOLDOWN_SECONDS = 15
+MESSAGE_DELIMITER = "[SEND]"
+TYPING_CHARS_PER_SECOND = 50  # ~250 CPM, fast mobile typing speed
+MIN_TYPING_DELAY = 0.8
+MAX_TYPING_DELAY = 5.0
 
 
 class ChatCog(commands.Cog):
@@ -147,15 +151,27 @@ class ChatCog(commands.Cog):
             await message.channel.send(get_error_response(classify_error(e)))
             return
 
+        # Store the full response (without delimiters) in memory
+        clean_response = response.replace(MESSAGE_DELIMITER, "\n")
         try:
             await self.memory.store(
-                channel_id, str(self.bot.user.id), self.bot.user.name, "assistant", response, for_user_id=user_id
+                channel_id, str(self.bot.user.id), self.bot.user.name, "assistant", clean_response, for_user_id=user_id
             )
         except Exception:
             log.exception("chat_store_response_failed", channel_id=channel_id)
 
-        for chunk in [response[i : i + 1990] for i in range(0, len(response), 1990)]:
-            await message.channel.send(chunk)
+        # Send as multiple messages with typing delay if LLM used [SEND] delimiter
+        parts = [p.strip() for p in response.split(MESSAGE_DELIMITER) if p.strip()]
+        for i, part in enumerate(parts):
+            # Chunk each part to respect Discord's 2000 char limit
+            for chunk in [part[j : j + 1990] for j in range(0, len(part), 1990)]:
+                await message.channel.send(chunk)
+            # Typing delay between parts (not after the last one)
+            if i < len(parts) - 1:
+                next_part = parts[i + 1]
+                delay = max(MIN_TYPING_DELAY, min(len(next_part) / TYPING_CHARS_PER_SECOND, MAX_TYPING_DELAY))
+                async with message.channel.typing():
+                    await asyncio.sleep(delay)
 
         # Async fact extraction — runs in background, doesn't block response
         task = asyncio.create_task(self._extract_user_facts(user_id, user_name, user_facts, recent))
