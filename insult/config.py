@@ -1,0 +1,76 @@
+"""Configuracion centralizada via .env + Pydantic Settings.
+
+.env file takes priority over shell environment variables via
+settings_customise_sources(). This prevents a stale ANTHROPIC_API_KEY
+exported in the user's shell profile from overriding the project key.
+"""
+
+import sys
+from pathlib import Path
+
+import structlog
+from pydantic import SecretStr
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
+
+log = structlog.get_logger()
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_ENV_FILE = _PROJECT_ROOT / ".env"
+
+
+class Settings(BaseSettings):
+    # Discord
+    discord_token: SecretStr
+    command_prefix: str = "!"
+
+    # Anthropic
+    anthropic_api_key: SecretStr
+    llm_model: str = "claude-sonnet-4-20250514"
+    llm_max_tokens: int = 1024
+    llm_timeout: float = 30.0
+    llm_max_retries: int = 5
+    system_prompt: str = "You are a helpful assistant."
+    persona_file: Path = _PROJECT_ROOT / "persona.md"
+
+    # Memory
+    memory_recent_limit: int = 50
+    memory_relevant_limit: int = 5
+
+    # Paths
+    storage_dir: Path = _PROJECT_ROOT / "storage"
+    db_path: Path = _PROJECT_ROOT / "storage" / "memory.db"
+
+    model_config = {"env_file": str(_ENV_FILE), "env_file_encoding": "utf-8"}
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """dotenv wins over shell env vars — prevents stale key overrides."""
+        return (init_settings, dotenv_settings, env_settings, file_secret_settings)
+
+    def ensure_dirs(self):
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
+
+    def load_persona(self):
+        """Load persona from file, overriding system_prompt."""
+        if self.persona_file.exists():
+            self.system_prompt = self.persona_file.read_text(encoding="utf-8")
+            log.info("persona_loaded", file=str(self.persona_file), length=len(self.system_prompt))
+
+
+try:
+    settings = Settings()
+except Exception as e:
+    log.critical("config_failed", error=str(e))
+    print(f"\nConfig error: {e}")
+    print("Copia .env.example a .env y llena los valores.\n")
+    sys.exit(1)
+
+settings.ensure_dirs()
+settings.load_persona()
