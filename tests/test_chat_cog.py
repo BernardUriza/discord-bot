@@ -52,8 +52,8 @@ class TestChatCog:
     async def test_sends_llm_response(self, cog, mock_ctx):
         cog.llm.chat = AsyncMock(return_value="Eres un pendejo.")
         await self._call_chat(cog, mock_ctx, "ayudame")
-        calls = self._channel_send(mock_ctx).call_args_list
-        assert any("Eres un pendejo." in str(c) for c in calls)
+        sent_text = " ".join(str(c) for c in self._channel_send(mock_ctx).call_args_list)
+        assert "Eres un pendejo." in sent_text
 
     async def test_stores_assistant_response(self, cog, mock_ctx):
         cog.llm.chat = AsyncMock(return_value="respuesta del bot")

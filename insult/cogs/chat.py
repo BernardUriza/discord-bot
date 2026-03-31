@@ -174,6 +174,8 @@ class ChatCog(commands.Cog):
 
         # Send as multiple messages with typing delay if LLM used [SEND] delimiter
         parts = [p.strip() for p in response.split(MESSAGE_DELIMITER) if p.strip()]
+        if not parts:
+            parts = [response.strip() or "..."]
         for i, part in enumerate(parts):
             # Append version tag to the very last chunk of the last part
             is_last_part = i == len(parts) - 1
