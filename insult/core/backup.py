@@ -39,8 +39,8 @@ async def download_db(db_path: Path) -> bool:
             try:
                 await container.create_container()
                 log.info("azure_container_created", container=CONTAINER_NAME)
-            except Exception:
-                pass  # already exists
+            except Exception:  # noqa: S110 — expected when container already exists
+                pass
 
             blob = container.get_blob_client(BLOB_NAME)
             try:

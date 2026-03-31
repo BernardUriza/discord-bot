@@ -37,10 +37,10 @@ class MemoryStore:
             )
         """)
         # Migration: add for_user_id if upgrading from old schema
-        try:
+        import contextlib
+
+        with contextlib.suppress(aiosqlite.OperationalError):
             await self._db.execute("ALTER TABLE messages ADD COLUMN for_user_id TEXT")
-        except aiosqlite.OperationalError:
-            pass  # column already exists
 
         await self._db.execute("""
             CREATE INDEX IF NOT EXISTS idx_channel_ts

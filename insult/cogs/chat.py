@@ -60,7 +60,9 @@ class ChatCog(commands.Cog):
 
         try:
             recent = await self.memory.get_recent(channel_id, self.settings.memory_recent_limit, user_id=user_id)
-            relevant = await self.memory.search(channel_id, message, self.settings.memory_relevant_limit, user_id=user_id)
+            relevant = await self.memory.search(
+                channel_id, message, self.settings.memory_relevant_limit, user_id=user_id
+            )
             context = self.memory.build_context(recent, relevant)
         except Exception:
             log.exception("chat_context_failed", channel_id=channel_id)

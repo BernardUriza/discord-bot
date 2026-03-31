@@ -47,6 +47,7 @@ omit = [
     "insult/config.py",    # Pydantic settings singleton
     "insult/core/llm.py",  # API client (integration test territory)
     "insult/core/memory.py",  # SQLite I/O (integration test territory)
+    "insult/core/backup.py",  # Azure Blob Storage I/O
 ]
 
 [tool.coverage.report]

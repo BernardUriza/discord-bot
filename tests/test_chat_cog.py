@@ -57,6 +57,7 @@ class TestChatCog:
             cog.bot.user.name,
             "assistant",
             "respuesta del bot",
+            for_user_id=str(mock_ctx.author.id),
         )
 
     async def test_handles_llm_error_gracefully(self, cog, mock_ctx):
