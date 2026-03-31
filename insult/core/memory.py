@@ -61,6 +61,19 @@ class MemoryStore:
                 updated_at REAL NOT NULL
             )
         """)
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS user_facts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                fact TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'general',
+                updated_at REAL NOT NULL
+            )
+        """)
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_facts
+            ON user_facts(user_id)
+        """)
         await self._db.commit()
         log.info("memory_connected", db_path=str(self.db_path))
 
@@ -263,3 +276,35 @@ class MemoryStore:
             context.append({"role": msg["role"], "content": content})
 
         return context
+
+    # --- User Facts ---
+
+    async def get_facts(self, user_id: str) -> list[dict]:
+        """Get all facts for a user, ordered by most recently updated."""
+        await self._ensure_connection()
+        cursor = await self._db.execute(
+            "SELECT id, fact, category, updated_at FROM user_facts WHERE user_id = ? ORDER BY updated_at DESC",
+            (user_id,),
+        )
+        rows = await cursor.fetchall()
+        return [{"id": r[0], "fact": r[1], "category": r[2], "updated_at": r[3]} for r in rows]
+
+    async def save_facts(self, user_id: str, facts: list[dict]):
+        """Replace all facts for a user with new ones (full rewrite per extraction).
+
+        Each fact dict should have 'fact' and 'category' keys.
+        """
+        await self._ensure_connection()
+        now = time.time()
+        try:
+            await self._db.execute("DELETE FROM user_facts WHERE user_id = ?", (user_id,))
+            for f in facts:
+                await self._db.execute(
+                    "INSERT INTO user_facts (user_id, fact, category, updated_at) VALUES (?, ?, ?, ?)",
+                    (user_id, f["fact"], f.get("category", "general"), now),
+                )
+            await self._db.commit()
+            log.info("facts_saved", user_id=user_id, count=len(facts))
+        except aiosqlite.Error as e:
+            log.error("facts_save_failed", user_id=user_id, error=str(e))
+            raise

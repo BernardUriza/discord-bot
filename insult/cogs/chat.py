@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import TYPE_CHECKING
 
@@ -12,6 +13,7 @@ from discord.ext import commands
 from insult.core.attachments import process_attachments
 from insult.core.character import build_adaptive_prompt
 from insult.core.errors import classify_error, get_error_response
+from insult.core.facts import build_facts_prompt, extract_facts
 
 if TYPE_CHECKING:
     from insult.app import Container
@@ -29,6 +31,7 @@ class ChatCog(commands.Cog):
         self.settings = container.settings
         self.bot = container.bot
         self._cooldowns: dict[int, float] = {}
+        self._background_tasks: set[asyncio.Task] = set()
 
     def _check_cooldown(self, user_id: int) -> float:
         """Returns 0 if ready, or seconds remaining."""
@@ -116,7 +119,16 @@ class ChatCog(commands.Cog):
                 text_block = {"type": "text", "text": last_msg["content"]}
                 context[-1] = {"role": "user", "content": [text_block, *attachment_blocks]}
 
+        # Load user facts for injection into prompt
+        user_facts = []
+        try:
+            user_facts = await self.memory.get_facts(user_id)
+        except Exception:
+            log.exception("chat_facts_load_failed", user_id=user_id)
+
         system_prompt = build_adaptive_prompt(self.settings.system_prompt, profile, len(context))
+        system_prompt += build_facts_prompt(user_name, user_facts)
+
         if profile and profile.is_confident:
             log.info(
                 "style_adapted",
@@ -144,3 +156,17 @@ class ChatCog(commands.Cog):
 
         for chunk in [response[i : i + 1990] for i in range(0, len(response), 1990)]:
             await message.channel.send(chunk)
+
+        # Async fact extraction — runs in background, doesn't block response
+        task = asyncio.create_task(self._extract_user_facts(user_id, user_name, user_facts, recent))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _extract_user_facts(self, user_id: str, user_name: str, existing_facts: list[dict], recent: list[dict]):
+        """Background task: extract user facts from recent conversation."""
+        try:
+            new_facts = await extract_facts(self.llm.client, self.settings.llm_model, user_name, existing_facts, recent)
+            if new_facts != existing_facts:
+                await self.memory.save_facts(user_id, new_facts)
+        except Exception:
+            log.exception("facts_extraction_background_failed", user_id=user_id)
