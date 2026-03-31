@@ -100,8 +100,10 @@ class ChatCog(commands.Cog):
             profile = None
 
         try:
-            recent = await self.memory.get_recent(channel_id, self.settings.memory_recent_limit, user_id=user_id)
-            relevant = await self.memory.search(channel_id, text, self.settings.memory_relevant_limit, user_id=user_id)
+            # Full channel context (all users) so the bot sees the whole conversation flow.
+            # Style adaptation is per-user (via profile), but context must be shared.
+            recent = await self.memory.get_recent(channel_id, self.settings.memory_recent_limit)
+            relevant = await self.memory.search(channel_id, text, self.settings.memory_relevant_limit)
             context = self.memory.build_context(recent, relevant)
         except Exception:
             log.exception("chat_context_failed", channel_id=channel_id)
