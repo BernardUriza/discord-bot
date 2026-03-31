@@ -73,12 +73,13 @@ def build_adaptive_prompt(base_prompt: str, profile, context_len: int) -> str:
 
         if profile.avg_word_count < 10:
             adaptations.append(
-                "This user is brief. Keep your responses short and punchy — 1-3 sentences. Hit hard, hit fast."
+                "This user tends to be brief. You can match their energy OR surprise them with depth — "
+                "your call as Insult. Don't lock yourself into always being short."
             )
         elif profile.avg_word_count > 40:
             adaptations.append(
-                "This user writes long messages. You can give more detailed responses with examples, "
-                "but stay sharp — don't ramble."
+                "This user writes long messages. You might go deep with them, or you might dismiss a wall of "
+                "text with a single emoji. Let the content decide, not the length."
             )
 
         if profile.formality < 0.25:

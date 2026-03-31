@@ -1,55 +1,58 @@
-# Insult — Discord Bot with Longitudinal Memory + Claude API
+# CLAUDE.md
 
-## Quick Start
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Commands
 ```bash
-python -m insult run          # Start the bot
-python -m insult db-stats     # Show memory stats
-pytest -v --cov               # Run tests
-ruff check . && ruff format . # Lint + format
+# Run
+python -m insult run              # Start the bot
+python -m insult db-stats         # Show memory stats
+python -m insult db-clean         # Clean old data
+
+# Test
+pytest -v --cov                   # All tests + coverage report
+pytest tests/test_chat_cog.py -v  # Single test file
+pytest -k "test_detect_break" -v  # Single test by name
+
+# Lint & Format
+ruff check . && ruff format .     # Lint + format (run before every commit)
+ruff check --fix .                # Auto-fix lint issues
+
+# Full CI locally
+ruff check . && ruff format --check . && pytest -v --cov --cov-fail-under=75 && bandit -r insult/ -c pyproject.toml && pip-audit
 ```
 
-## Project Structure
-```
-insult/
-├── __main__.py          # CLI (typer): run, db-stats, db-clean
-├── app.py               # DI container (Container dataclass)
-├── bot.py               # Discord lifecycle, events, health check
-├── config.py            # Pydantic Settings (.env)
-├── cogs/
-│   ├── chat.py          # !chat — conversation with memory + attachments
-│   └── utility.py       # !ping, !memoria, !buscar, !perfil
-└── core/
-    ├── attachments.py   # Classify + process Discord attachments (images, text, PDFs)
-    ├── character.py     # Break detection (20 regex), sanitization, adaptive prompt
-    ├── errors.py        # In-character error responses (never expose "Claude")
-    ├── llm.py           # Claude API client + character break retry
-    ├── memory.py        # SQLite longitudinal memory + user style profiles
-    └── style.py         # User style profiling (EMA: language, formality, tech level)
-```
+## Architecture
+
+**Request flow**: User message → `ChatCog.on_message` (cogs/chat.py) → memory store + profile update → context build (recent 50 + 5 keyword-relevant) → `build_adaptive_prompt` (core/character.py) layers system prompt → `LLMClient.chat` (core/llm.py) with break detection retry → response chunked to Discord (1990 char limit).
+
+**DI container**: `app.py` creates a `Container` dataclass holding Settings, MemoryStore, LLMClient, and Bot. Cogs receive the container via constructor. All tests mock this container (see `tests/conftest.py` for fixtures).
+
+**Config**: `config.py` uses Pydantic BaseSettings with `.env` file taking priority over shell env vars (custom source ordering). Settings singleton is created at module import time — tests that import from `insult.core.*` modules work fine, but importing `insult.config` directly requires `.env` to exist.
+
+**Chat flow (no prefix)**: The bot responds to ALL messages in channels (via `on_message` listener), not just `!chat`. Messages starting with `!` are ignored by the listener (handled as commands). Per-user cooldown is 15s.
+
+**System prompt composition** (core/character.py `build_adaptive_prompt`):
+1. Base persona from `persona.md` (loaded at startup into settings.system_prompt)
+2. Style adaptation hints appended per-user (if profile has 5+ messages)
+3. Identity reinforcement suffix for conversations >10 messages
+
+**Memory** (core/memory.py): Append-only SQLite via aiosqlite. Context is built per-channel (all users see same conversation), but style profiles are per-user. `_ensure_connection()` auto-reconnects before every DB operation.
+
+**Azure backup**: Optional. If `AZURE_STORAGE_CONNECTION_STRING` is set, DB uploads every 10 min and downloads on first startup.
+
+## Testing Patterns
+
+Tests use a fully mocked DI container (`conftest.py`). To test a cog:
+1. Create the cog with `mock_container` fixture
+2. Call the method directly (e.g., `cog._respond(mock_message, "text")`)
+3. Assert on `mock_llm.chat`, `mock_memory.store`, `message.channel.send`
+
+Coverage threshold is 75% (`pyproject.toml`). Pure I/O modules (bot.py, app.py, config.py, llm.py, memory.py) are excluded from coverage.
 
 ## Rules
-Detailed rules live in `.claude/rules/`:
-- **architecture.md** — Project structure, patterns, dependencies, attachments, security
-- **robustness.md** — Error handling, rate limiting, LLM resilience, logging, lifecycle
-- **testing.md** — Unit tests, E2E testing with Discord MCP, test mode, checklist
-- **workflow.md** — Git workflow, CI pipeline (4 layers), local dev flow
-- **persona.md** — Character identity, guard system, style adaptation, prompt architecture
-
-## CI Pipeline (GitHub Actions)
-4 layers, all must pass:
-1. **Ruff Lint & Format** — code quality gate (~8s)
-2. **Tests + Coverage** — 98 tests, 80% minimum (~27s)
-3. **Dependency Audit** — pip-audit for CVEs (~23s)
-4. **Code Security** — bandit SAST (~7s)
-
-## E2E Testing
-Use the Discord MCP server (`barryyip0625/mcp-discord`) to test the bot end-to-end.
-See `.claude/rules/testing.md` for full instructions.
-Key: start bot locally → send commands via MCP → verify responses.
-
-## Key Patterns
-- **Persona**: `persona.md` defines the Insult character — never expose "Claude" or break character
-- **Style Adaptation**: Bot profiles each user (EMA) and adjusts tone without losing identity
-- **Memory**: Append-only SQLite, 50 recent messages + keyword search, user style profiles
-- **Attachments**: Images (vision), text/code (25+ extensions), PDFs — 5MB limit
-- **Character Guard**: 20 regex patterns detect breaks → auto-retry → sanitize as fallback
+Detailed rules in `.claude/rules/`: architecture, robustness, testing, workflow, persona. Key non-obvious rules:
+- **Never expose "Claude"/"Anthropic"/"AI"** in bot responses — character guard auto-retries and sanitizes
+- Error messages to users must be in-character (via `core/errors.py`)
+- All logging via structlog, never print()
+- DB write failures are logged but don't crash commands

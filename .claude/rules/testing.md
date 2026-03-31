@@ -41,3 +41,23 @@ When you need to verify that the bot actually works end-to-end (not just unit te
 - [ ] Error responses are in-character (not exposing internals)
 - [ ] `!perfil` shows style profile after 5+ messages
 - [ ] Long messages are chunked correctly (< 2000 chars per message)
+
+## E2E via CI/CD Pipeline (Production Verification)
+
+E2E testing means pushing code, triggering the full CI/CD pipeline, and monitoring the deployment to Azure. This is the real verification flow:
+
+### Steps
+1. Commit and push to `main`
+2. CI runs (GitHub Actions: lint, tests, audit, security) — monitor with `gh run watch --exit-status`
+3. On CI success, CD triggers automatically (workflow_run on CI completion)
+4. CD builds Docker image, pushes to Azure Container Registry (insultacr), deploys to Azure Container Apps (insult-bot in insult-rg)
+5. Monitor CD deployment via `az` CLI:
+   - `gh run list --workflow=cd.yml --limit=3` to check CD run status
+   - `az containerapp show --name insult-bot --resource-group insult-rg --query "properties.latestRevisionName"` to verify new revision
+   - `az containerapp logs show --name insult-bot --resource-group insult-rg --follow` to tail logs and confirm bot starts healthy
+6. Once deployed, verify the bot responds in Discord (either manually or via MCP)
+
+### Key Resources
+- **ACR**: insultacr.azurecr.io
+- **Container App**: insult-bot (resource group: insult-rg)
+- **CD workflow**: `.github/workflows/cd.yml` — triggers on CI success on main

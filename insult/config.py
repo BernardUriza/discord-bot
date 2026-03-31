@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     # Anthropic
     anthropic_api_key: SecretStr
     llm_model: str = "claude-sonnet-4-20250514"
-    llm_max_tokens: int = 1024
+    llm_max_tokens: int = 2048
     llm_timeout: float = 30.0
     llm_max_retries: int = 5
     system_prompt: str = "You are a helpful assistant."
