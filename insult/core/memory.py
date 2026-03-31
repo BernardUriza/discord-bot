@@ -282,7 +282,8 @@ class MemoryStore:
 
         for msg in recent:
             ts = f"[{self._format_relative_time(msg['timestamp'])}] "
-            content = f"{ts}{msg['user_name']}: {msg['content']}" if msg["role"] == "user" else f"{ts}{msg['content']}"
+            # Both user and assistant messages get name prefix for clear speaker attribution
+            content = f"{ts}{msg['user_name']}: {msg['content']}"
             context.append({"role": msg["role"], "content": content})
 
         return context
