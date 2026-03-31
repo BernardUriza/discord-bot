@@ -59,6 +59,7 @@ skip_covered = true
 exclude_dirs = ["tests", ".venv"]
 skips = [
     "B101",  # assert OK
+    "B110",  # try-except-pass used for expected errors (e.g. Azure container exists)
     "B311",  # random.choice for error responses, not crypto
     "B608",  # SQL queries use parameterized ? placeholders
 ]
