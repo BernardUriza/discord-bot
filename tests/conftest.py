@@ -75,14 +75,27 @@ def mock_container(mock_settings, mock_memory, mock_llm, mock_bot):
 
 @pytest.fixture
 def mock_ctx():
-    """Mocked discord.py Context."""
+    """Mocked discord.py Context with message.channel async methods."""
     ctx = MagicMock()
     ctx.send = AsyncMock()
     ctx.author.id = 123456
     ctx.author.display_name = "TestUser"
     ctx.channel.id = 789
+
+    # mock_ctx.message simulates a discord.Message
+    msg = MagicMock()
+    msg.author = ctx.author
+    msg.channel = MagicMock()
+    msg.channel.id = 789
+    msg.channel.send = AsyncMock()
+    msg.channel.typing = MagicMock(return_value=AsyncMock())
+    msg.channel.typing.return_value.__aenter__ = AsyncMock()
+    msg.channel.typing.return_value.__aexit__ = AsyncMock(return_value=False)
+    msg.attachments = []
+    ctx.message = msg
+
+    # Also set up ctx.typing for backwards compat
     ctx.typing = MagicMock(return_value=AsyncMock())
-    # Make ctx.typing() work as async context manager
     ctx.typing.return_value.__aenter__ = AsyncMock()
-    ctx.typing.return_value.__aexit__ = AsyncMock(return_value=False)  # False = don't suppress exceptions
+    ctx.typing.return_value.__aexit__ = AsyncMock(return_value=False)
     return ctx

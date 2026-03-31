@@ -1,9 +1,11 @@
-"""!chat command — core conversation with longitudinal memory."""
+"""Chat cog — responds to all messages, no prefix needed."""
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
+import discord
 import structlog
 from discord.ext import commands
 
@@ -17,6 +19,7 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 MAX_MESSAGE_LENGTH = 4000
+COOLDOWN_SECONDS = 15
 
 
 class ChatCog(commands.Cog):
@@ -25,59 +28,92 @@ class ChatCog(commands.Cog):
         self.llm = container.llm
         self.settings = container.settings
         self.bot = container.bot
+        self._cooldowns: dict[int, float] = {}
 
-    @commands.command(name="chat")
-    @commands.cooldown(1, 15, commands.BucketType.user)
-    async def chat(self, ctx: commands.Context, *, message: str):
-        """Habla con la IA. Usa memoria longitudinal del canal."""
-        if len(message) > MAX_MESSAGE_LENGTH:
-            await ctx.send(get_error_response("too_long"))
+    def _check_cooldown(self, user_id: int) -> float:
+        """Returns 0 if ready, or seconds remaining."""
+        now = time.monotonic()
+        last = self._cooldowns.get(user_id, 0)
+        remaining = COOLDOWN_SECONDS - (now - last)
+        if remaining <= 0:
+            self._cooldowns[user_id] = now
+            return 0
+        return remaining
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        """Respond to every message — no !chat prefix needed."""
+        # Ignore bots (including ourselves)
+        if message.author.bot:
             return
 
-        channel_id = str(ctx.channel.id)
-        user_id = str(ctx.author.id)
-        user_name = ctx.author.display_name
+        # Ignore other commands (!ping, !memoria, !buscar, !perfil, !chat)
+        if message.content.startswith(self.settings.command_prefix):
+            return
 
-        # Process attachments (images, text files, PDFs)
+        # Ignore empty messages (e.g. only attachments with no text, stickers)
+        text = message.content.strip()
+        if not text and not message.attachments:
+            return
+
+        if len(text) > MAX_MESSAGE_LENGTH:
+            await message.channel.send(get_error_response("too_long"))
+            return
+
+        # Per-user cooldown
+        remaining = self._check_cooldown(message.author.id)
+        if remaining > 0:
+            await message.channel.send(f"Calmate, espera {remaining:.0f}s. Cual es la urgencia?")
+            return
+
+        await self._respond(message, text)
+
+    @commands.command(name="chat")
+    @commands.cooldown(1, COOLDOWN_SECONDS, commands.BucketType.user)
+    async def chat(self, ctx: commands.Context, *, message: str):
+        """Fallback: !chat still works for explicit invocation."""
+        await self._respond(ctx.message, message)
+
+    async def _respond(self, message: discord.Message, text: str):
+        """Core response logic — shared by on_message and !chat command."""
+        channel_id = str(message.channel.id)
+        user_id = str(message.author.id)
+        user_name = message.author.display_name
+
+        # Process attachments
         attachment_blocks = []
-        if ctx.message.attachments:
-            blocks, errors = await process_attachments(ctx.message.attachments)
+        if message.attachments:
+            blocks, errors = await process_attachments(message.attachments)
             attachment_blocks = blocks
             for err in errors:
-                await ctx.send(err)
+                await message.channel.send(err)
 
         try:
-            await self.memory.store(channel_id, user_id, user_name, "user", message)
+            await self.memory.store(channel_id, user_id, user_name, "user", text)
         except Exception:
             log.exception("chat_store_user_failed", channel_id=channel_id)
 
-        # Update user style profile (EMA)
         try:
-            profile = await self.memory.update_profile(user_id, message)
+            profile = await self.memory.update_profile(user_id, text)
         except Exception:
             log.exception("chat_profile_update_failed", user_id=user_id)
             profile = None
 
         try:
             recent = await self.memory.get_recent(channel_id, self.settings.memory_recent_limit, user_id=user_id)
-            relevant = await self.memory.search(
-                channel_id, message, self.settings.memory_relevant_limit, user_id=user_id
-            )
+            relevant = await self.memory.search(channel_id, text, self.settings.memory_relevant_limit, user_id=user_id)
             context = self.memory.build_context(recent, relevant)
         except Exception:
             log.exception("chat_context_failed", channel_id=channel_id)
-            await ctx.send(get_error_response("context_failed"))
+            await message.channel.send(get_error_response("context_failed"))
             return
 
-        # Inject attachment content blocks into the last user message
         if attachment_blocks and context:
             last_msg = context[-1]
             if last_msg["role"] == "user":
-                # Convert text-only message to multimodal content blocks
                 text_block = {"type": "text", "text": last_msg["content"]}
                 context[-1] = {"role": "user", "content": [text_block, *attachment_blocks]}
 
-        # Build adaptive system prompt: base persona + user style + identity reinforcement
         system_prompt = build_adaptive_prompt(self.settings.system_prompt, profile, len(context))
         if profile and profile.is_confident:
             log.info(
@@ -90,11 +126,11 @@ class ChatCog(commands.Cog):
             )
 
         try:
-            async with ctx.typing():
+            async with message.channel.typing():
                 response = await self.llm.chat(system_prompt, context)
         except Exception as e:
             log.exception("chat_llm_failed", channel_id=channel_id, error_type=type(e).__name__)
-            await ctx.send(get_error_response(classify_error(e)))
+            await message.channel.send(get_error_response(classify_error(e)))
             return
 
         try:
@@ -105,4 +141,4 @@ class ChatCog(commands.Cog):
             log.exception("chat_store_response_failed", channel_id=channel_id)
 
         for chunk in [response[i : i + 1990] for i in range(0, len(response), 1990)]:
-            await ctx.send(chunk)
+            await message.channel.send(chunk)
