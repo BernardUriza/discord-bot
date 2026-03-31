@@ -28,6 +28,13 @@ pip-audit                                       # security deps
 - Commit messages: imperative mood, explain what and why
 - One logical change per commit
 
+## Version Bumping
+- On every commit, bump the patch version (micro point) in BOTH:
+  - `pyproject.toml` → `version = "X.Y.Z"`
+  - `insult/cogs/chat.py` → `VERSION_TAG = "ᵇᵉᵗᵃ ᵛX·Y·Z"` (superscript unicode)
+- The version tag appears at the bottom of every bot response so we can track which deploy is responding
+- Bump patch (Z) for fixes/small changes, minor (Y) for features, major (X) for breaking changes
+
 ## Development Flow
 1. Make changes
 2. Run `ruff check . && ruff format .` (lint + format)
