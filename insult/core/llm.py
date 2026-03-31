@@ -30,12 +30,17 @@ class LLMClient:
                     max_tokens=self.max_tokens,
                     system=system_prompt,
                     messages=messages,
+                    cache_control={"type": "ephemeral"},
                 )
+                cache_read = getattr(response.usage, "cache_read_input_tokens", 0) or 0
+                cache_create = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
                 log.info(
                     "llm_response",
                     model=self.model,
                     input_tokens=response.usage.input_tokens,
                     output_tokens=response.usage.output_tokens,
+                    cache_read=cache_read,
+                    cache_create=cache_create,
                     stop_reason=response.stop_reason,
                 )
                 block = response.content[0]
