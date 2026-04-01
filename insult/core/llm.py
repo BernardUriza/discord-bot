@@ -43,7 +43,12 @@ class LLMClient:
         self.max_retries = max_retries
 
     async def _send(
-        self, system_prompt: str, messages: list[MessageParam], *, tools: list[dict] | None = None
+        self,
+        system_prompt: str,
+        messages: list[MessageParam],
+        *,
+        tools: list[dict] | None = None,
+        tool_choice: dict | None = None,
     ) -> LLMResponse:
         """Raw API call with retry logic for transient errors."""
         last_error = None
@@ -60,8 +65,8 @@ class LLMClient:
                 }
                 if tools:
                     kwargs["tools"] = tools
-                    # tool_choice="auto" lets Claude decide when to use tools
-                    # AND still emit text alongside tool_use blocks
+                    if tool_choice:
+                        kwargs["tool_choice"] = tool_choice
 
                 response = await self.client.messages.create(**kwargs)
                 cache_read = getattr(response.usage, "cache_read_input_tokens", 0) or 0
@@ -114,13 +119,18 @@ class LLMClient:
         raise last_error
 
     async def chat(
-        self, system_prompt: str, messages: list[MessageParam], *, tools: list[dict] | None = None
+        self,
+        system_prompt: str,
+        messages: list[MessageParam],
+        *,
+        tools: list[dict] | None = None,
+        tool_choice: dict | None = None,
     ) -> LLMResponse:
         """Send messages with optional tools, detect character breaks, retry if needed.
 
         Returns LLMResponse with text (for Discord) and tool_calls (for actions).
         """
-        response = await self._send(system_prompt, messages, tools=tools)
+        response = await self._send(system_prompt, messages, tools=tools, tool_choice=tool_choice)
 
         # Strip leaked metadata (timestamps, speaker labels) before any other processing
         response.text = strip_metadata(response.text)
@@ -131,7 +141,7 @@ class LLMClient:
 
             reinforced_prompt = system_prompt + CHARACTER_REINFORCEMENT
             try:
-                retry_response = await self._send(reinforced_prompt, messages, tools=tools)
+                retry_response = await self._send(reinforced_prompt, messages, tools=tools, tool_choice=tool_choice)
                 retry_response.text = strip_metadata(retry_response.text)
                 retry_breaks = detect_break(retry_response.text)
 

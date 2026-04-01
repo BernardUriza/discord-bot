@@ -18,6 +18,7 @@ from insult.core.attachments import process_attachments
 from insult.core.character import build_adaptive_prompt
 from insult.core.errors import classify_error, get_error_response
 from insult.core.facts import build_facts_prompt, extract_facts
+from insult.core.presets import PresetModifier
 
 if TYPE_CHECKING:
     from insult.app import Container
@@ -31,7 +32,7 @@ MESSAGE_DELIMITER = "[SEND]"
 TYPING_CHARS_PER_SECOND = 50  # ~250 CPM, fast mobile typing speed
 MIN_TYPING_DELAY = 0.8
 MAX_TYPING_DELAY = 5.0
-VERSION_TAG = "ᵇᵉᵗᵃ ᵛ⁰·⁷·⁰"  # superscript unicode — visible but unobtrusive
+VERSION_TAG = "ᵇᵉᵗᵃ ᵛ⁰·⁷·³"  # superscript unicode — visible but unobtrusive
 
 # Reaction system — [REACT:💀,🔥] parsed from LLM response
 REACTION_PATTERN = re.compile(r"\[REACT:([^\]]*)\]", re.IGNORECASE)
@@ -229,9 +230,14 @@ class ChatCog(commands.Cog):
                 verbosity=round(profile.avg_word_count, 1),
             )
 
+        # If user wants a server action, force tool_choice="any" so Claude MUST use the tool.
+        # With "any", Claude won't emit text — we generate confirmation ourselves.
+        force_tool = PresetModifier.ACTION_INTENT in preset.modifiers
+        tool_choice = {"type": "any"} if force_tool else None
+
         try:
             async with message.channel.typing():
-                llm_response = await self.llm.chat(system_prompt, context, tools=CHANNEL_TOOLS)
+                llm_response = await self.llm.chat(system_prompt, context, tools=CHANNEL_TOOLS, tool_choice=tool_choice)
         except Exception as e:
             log.exception("chat_llm_failed", channel_id=channel_id, error_type=type(e).__name__)
             await message.channel.send(get_error_response(classify_error(e)))

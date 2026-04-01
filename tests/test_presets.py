@@ -124,6 +124,24 @@ class TestClassifyPreset:
         result = classify_preset("ya no quiero programar en Python")
         assert PresetModifier.MEMORY_RECALL not in result.modifiers
 
+    # --- ACTION_INTENT ---
+
+    def test_create_channel_intent_spanish(self):
+        result = classify_preset("crea un canal de ciencia")
+        assert PresetModifier.ACTION_INTENT in result.modifiers
+
+    def test_create_channel_intent_english(self):
+        result = classify_preset("create a channel for programming")
+        assert PresetModifier.ACTION_INTENT in result.modifiers
+
+    def test_private_space_intent(self):
+        result = classify_preset("necesito un espacio privado")
+        assert PresetModifier.ACTION_INTENT in result.modifiers
+
+    def test_no_action_intent_on_casual(self):
+        result = classify_preset("hoy fui al canal de panama")
+        assert PresetModifier.ACTION_INTENT not in result.modifiers
+
     # --- CONTEXT WINDOW ---
 
     def test_context_boosts_classification(self):

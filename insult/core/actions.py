@@ -31,10 +31,12 @@ CHANNEL_TOOLS = [
     {
         "name": "create_channel",
         "description": (
-            "Create a Discord channel in the server. Use when a user explicitly asks for a new channel, "
-            "a private space, or a topic-specific area. Types: 'private' (only user + you can see it), "
-            "'topic' (visible to everyone), 'category' (channel category). "
-            "ONLY use when the user clearly wants a channel created — not for hypothetical discussions."
+            "ACTUALLY create a real Discord channel in the server. You MUST call this tool whenever "
+            "a user asks you to create, make, or set up a channel. Do NOT just say you created it — "
+            "you must call this tool for the channel to actually exist. Without calling this tool, "
+            "no channel is created and you would be lying. "
+            "Types: 'private' (only requesting user + you can see it), "
+            "'topic' (visible to everyone in server), 'category' (channel grouping)."
         ),
         "input_schema": {
             "type": "object",

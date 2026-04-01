@@ -29,6 +29,7 @@ class PresetMode(StrEnum):
 class PresetModifier(StrEnum):
     MEMORY_RECALL = "memory_recall"
     CONTEMPT = "contempt"
+    ACTION_INTENT = "action_intent"  # User wants a server action (channel creation, etc.)
 
 
 @dataclass
@@ -95,6 +96,16 @@ _PLAYFUL_PATTERNS = [
     re.compile(r"(?i)\b(a que no|bet you can't|te reto|i dare you|challenge)\b"),
     re.compile(r"(?i)\b(meme|chiste|joke|funny|gracioso|chistoso)\b"),
     re.compile(r"(?i)\b(que (random|raro|weird)|thats (random|weird))\b"),
+]
+
+# ACTION_INTENT modifier triggers — user wants channel creation or server actions
+_ACTION_INTENT_PATTERNS = [
+    re.compile(r"(?i)\b(crea|crear|hazme|haz|arma|armame|pon|ponme)\b.*(canal|channel|espacio|space|sala|room)", re.S),
+    re.compile(r"(?i)\b(canal|channel|espacio|space)\b.*(crea|crear|haz|hazme|nuevo|new|privado|private)", re.S),
+    re.compile(
+        r"(?i)\b(necesito|quiero|dame|give me|i need|i want)\b.*(canal|channel|espacio|space|privado|private)", re.S
+    ),
+    re.compile(r"(?i)\b(create|make|set up)\b.*(channel|space|room)", re.S),
 ]
 
 # Stopwords filtered out when checking memory recall overlap
@@ -251,6 +262,10 @@ def classify_preset(
     stripped = current_message.strip()
     if stripped and len(stripped) <= 3 and _count_pattern_hits(stripped, _CONTEMPT_PATTERNS) > 0:
         modifiers.append(PresetModifier.CONTEMPT)
+
+    # ACTION_INTENT: user wants a server action (channel creation)
+    if _count_pattern_hits(current_message, _ACTION_INTENT_PATTERNS) > 0:
+        modifiers.append(PresetModifier.ACTION_INTENT)
 
     # MEMORY_RECALL: check if user facts exist and could connect to current message
     if user_facts:
