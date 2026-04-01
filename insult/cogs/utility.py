@@ -1,4 +1,4 @@
-"""Utility commands: ping, memoria, buscar."""
+"""Utility commands: ping, memoria, buscar, facts."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import structlog
 from discord.ext import commands
 
 from insult.core.errors import get_error_response
+from insult.core.facts import extract_facts
 
 if TYPE_CHECKING:
     from insult.app import Container
@@ -18,6 +19,8 @@ log = structlog.get_logger()
 class UtilityCog(commands.Cog):
     def __init__(self, container: Container):
         self.memory = container.memory
+        self.llm = container.llm
+        self.settings = container.settings
         self.bot = container.bot
 
     @commands.command(name="perfil")
@@ -158,3 +161,39 @@ class UtilityCog(commands.Cog):
 
         lines.append(f"\n*Total: {len(user_facts)} facts*")
         await ctx.send("\n".join(lines))
+
+    @commands.command(name="syncfacts")
+    @commands.cooldown(1, 60, commands.BucketType.guild)
+    async def syncfacts(self, ctx: commands.Context):
+        """Recorre todos los mensajes históricos y extrae/actualiza facts de cada usuario."""
+        await ctx.send("🔄 Sincronizando facts de todos los usuarios... esto puede tardar.")
+
+        try:
+            user_data = await self.memory.get_all_user_messages(limit_per_user=30)
+        except Exception:
+            log.exception("syncfacts_get_messages_failed")
+            await ctx.send(get_error_response("generic"))
+            return
+
+        synced = 0
+        errors = 0
+        for user_id, data in user_data.items():
+            user_name = data["user_name"]
+            messages = data["messages"]
+            if not messages:
+                continue
+
+            try:
+                existing = await self.memory.get_facts(user_id)
+                new_facts = await extract_facts(self.llm.client, self.settings.llm_model, user_name, existing, messages)
+                await self.memory.save_facts(user_id, new_facts)
+                synced += 1
+                await ctx.send(f"✅ **{user_name}**: {len(new_facts)} facts")
+            except Exception:
+                log.exception("syncfacts_user_failed", user_id=user_id)
+                errors += 1
+
+        summary = f"🏁 Sync completo: **{synced}** usuarios procesados"
+        if errors:
+            summary += f", **{errors}** errores"
+        await ctx.send(summary)

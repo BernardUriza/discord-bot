@@ -288,6 +288,30 @@ class MemoryStore:
 
         return context
 
+    async def get_all_user_messages(self, limit_per_user: int = 30) -> dict[str, list[dict]]:
+        """Get recent messages grouped by user_id (cross-channel). For bulk fact extraction."""
+        await self._ensure_connection()
+        cursor = await self._db.execute(
+            "SELECT DISTINCT user_id, user_name FROM messages WHERE role = 'user' ORDER BY timestamp DESC"
+        )
+        users = await cursor.fetchall()
+
+        result = {}
+        for user_id, user_name in users:
+            cursor = await self._db.execute(
+                "SELECT user_name, role, content, timestamp FROM messages "
+                "WHERE user_id = ? OR for_user_id = ? ORDER BY timestamp DESC LIMIT ?",
+                (user_id, user_id, limit_per_user),
+            )
+            rows = await cursor.fetchall()
+            result[user_id] = {
+                "user_name": user_name,
+                "messages": [
+                    {"user_name": r[0], "role": r[1], "content": r[2], "timestamp": r[3]} for r in reversed(rows)
+                ],
+            }
+        return result
+
     # --- User Facts ---
 
     async def get_facts(self, user_id: str) -> list[dict]:
