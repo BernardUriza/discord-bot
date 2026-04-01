@@ -113,3 +113,48 @@ class UtilityCog(commands.Cog):
 
         lines = [f"**{r['user_name']}:** {r['content'][:100]}" for r in results]
         await ctx.send(f"**Resultados para '{query}':**\n" + "\n".join(lines))
+
+    @commands.command(name="facts")
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def facts(self, ctx: commands.Context, member: commands.MemberConverter | None = None):
+        """Muestra los facts de un usuario. Sin argumento = tus facts. Con @mention = facts de esa persona."""
+        target = member or ctx.author
+        user_id = str(target.id)
+        display_name = target.display_name
+
+        try:
+            user_facts = await self.memory.get_facts(user_id)
+        except Exception:
+            log.exception("facts_command_failed", user_id=user_id)
+            await ctx.send(get_error_response("generic"))
+            return
+
+        if not user_facts:
+            await ctx.send(f"No tengo facts de **{display_name}**. Que hable más y los voy juntando.")
+            return
+
+        # Group by category
+        by_cat: dict[str, list[str]] = {}
+        for f in user_facts:
+            by_cat.setdefault(f["category"], []).append(f["fact"])
+
+        cat_emojis = {
+            "identity": "🏷️",
+            "profession": "💼",
+            "location": "📍",
+            "interests": "🎮",
+            "technical": "💻",
+            "personal": "🧠",
+            "preferences": "⭐",
+            "general": "📝",
+        }
+
+        lines = [f"**Facts de {display_name}:**\n"]
+        for cat, facts_list in by_cat.items():
+            emoji = cat_emojis.get(cat, "📝")
+            lines.append(f"{emoji} **{cat.title()}**")
+            for fact in facts_list:
+                lines.append(f"  → {fact}")
+
+        lines.append(f"\n*Total: {len(user_facts)} facts*")
+        await ctx.send("\n".join(lines))

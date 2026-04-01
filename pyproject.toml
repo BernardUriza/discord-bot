@@ -1,6 +1,6 @@
 [project]
 name = "insult"
-version = "0.3.2"
+version = "0.3.3"
 requires-python = ">=3.14"
 
 [tool.ruff]
@@ -48,6 +48,7 @@ omit = [
     "insult/core/llm.py",  # API client (integration test territory)
     "insult/core/memory.py",  # SQLite I/O (integration test territory)
     "insult/core/backup.py",  # Azure Blob Storage I/O
+    "insult/cogs/utility.py",  # Discord commands (requires real bot context)
 ]
 
 [tool.coverage.report]
