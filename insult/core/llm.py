@@ -83,6 +83,17 @@ class LLMClient:
                 log.warning("llm_rate_limited", attempt=attempt, wait_seconds=wait)
                 await asyncio.sleep(wait)
 
+            except anthropic.BadRequestError as e:
+                # If tools caused the 400, retry WITHOUT tools so the bot doesn't go down
+                if tools and "tool" in str(e).lower():
+                    log.warning("llm_tools_rejected_fallback", error=str(e))
+                    kwargs.pop("tools", None)
+                    tools = None  # Don't try tools again on retry
+                    continue
+                last_error = e
+                log.error("llm_bad_request", error=str(e))
+                break
+
             except anthropic.AuthenticationError as e:
                 log.error("llm_auth_error", error=str(e))
                 raise
@@ -96,7 +107,7 @@ class LLMClient:
 
             except anthropic.APIError as e:
                 last_error = e
-                log.error("llm_api_error", status=e.status_code, error=str(e))
+                log.error("llm_api_error", error=str(e))
                 break
 
         log.error("llm_failed", attempts=self.max_retries, last_error=str(last_error))

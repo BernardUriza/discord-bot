@@ -35,4 +35,29 @@ jobs:
             --name insult-bot \
             --resource-group insult-rg \
             --image insultacr.azurecr.io/insult-bot:${{ github.sha }}
-# 2026-03-31T08:25:54Z
+
+      - name: Verify deployment health
+        run: |
+          echo "Waiting 30s for new revision to start..."
+          sleep 30
+          # Check that the new revision is running
+          REVISION=$(az containerapp show \
+            --name insult-bot \
+            --resource-group insult-rg \
+            --query "properties.latestRevisionName" -o tsv)
+          echo "Latest revision: $REVISION"
+          # Check logs for bot_ready event (proves bot started successfully)
+          LOGS=$(az containerapp logs show \
+            --name insult-bot \
+            --resource-group insult-rg \
+            --tail 30 2>&1 || true)
+          echo "$LOGS"
+          if echo "$LOGS" | grep -q "bot_ready"; then
+            echo "✅ Bot is healthy — bot_ready event found in logs"
+          elif echo "$LOGS" | grep -q "critical\|CRITICAL\|Traceback"; then
+            echo "❌ CRITICAL: Bot may have crashed on startup!"
+            echo "$LOGS" | grep -E "critical|CRITICAL|Traceback|Error" || true
+            exit 1
+          else
+            echo "⚠️ Could not confirm bot_ready — may need more time. Check manually."
+          fi

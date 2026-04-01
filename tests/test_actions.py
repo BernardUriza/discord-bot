@@ -26,6 +26,24 @@ class TestChannelTools:
         assert schema["required"] == ["name", "channel_type"]
         assert schema["additionalProperties"] is False
 
+    def test_conforms_to_anthropic_tool_schema(self):
+        """Validate tool definitions conform to Anthropic API requirements.
+        This catches issues like strict:true on unsupported models BEFORE production."""
+        for tool in CHANNEL_TOOLS:
+            # Required top-level fields
+            assert "name" in tool, "Tool must have 'name'"
+            assert "input_schema" in tool, "Tool must have 'input_schema'"
+            assert isinstance(tool["name"], str)
+            # Schema must be a valid JSON Schema object
+            schema = tool["input_schema"]
+            assert schema["type"] == "object"
+            assert isinstance(schema.get("properties", {}), dict)
+            # strict:true is NOT supported on all models — should not be present
+            assert "strict" not in tool, (
+                f"Tool '{tool['name']}' has strict:true which is not supported on claude-sonnet-4. "
+                "Remove it or gate it behind a model check."
+            )
+
     def test_valid_channel_types(self):
         schema = CHANNEL_TOOLS[0]["input_schema"]
         assert set(schema["properties"]["channel_type"]["enum"]) == {"private", "topic", "category"}
