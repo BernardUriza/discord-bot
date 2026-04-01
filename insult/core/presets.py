@@ -213,6 +213,9 @@ MODIFIER_GUIDANCE: dict[PresetModifier, str] = {
         "- Don't explain why the message doesn't deserve a response. That defeats the purpose.\n"
         "- If the next message is better, immediately re-engage fully."
     ),
+    # ACTION_INTENT has no prompt guidance — it's a signal for chat.py to force tool_choice,
+    # not a behavioral instruction for the LLM.
+    PresetModifier.ACTION_INTENT: "",
 }
 
 
@@ -345,5 +348,7 @@ def build_preset_prompt(selection: PresetSelection) -> str:
     """Build the preset guidance section for injection into system prompt."""
     parts = [PRESET_GUIDANCE[selection.mode]]
     for modifier in selection.modifiers:
-        parts.append(MODIFIER_GUIDANCE[modifier])
+        guidance = MODIFIER_GUIDANCE.get(modifier, "")
+        if guidance:
+            parts.append(guidance)
     return "\n\n".join(parts)
