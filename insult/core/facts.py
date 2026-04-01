@@ -14,8 +14,8 @@ import structlog
 log = structlog.get_logger()
 
 EXTRACTION_PROMPT = """\
-You are a fact extractor. Given a conversation between a user and "Insult" (a chatbot), \
-extract interesting, persistent facts about the USER (not about Insult).
+You are a fact extractor. Given a conversation in a group chat involving "Insult" (a chatbot) \
+and multiple users, extract interesting, persistent facts about the TARGET USER.
 
 Focus on facts a friend would remember:
 - Name, nickname, or how they want to be called
@@ -29,17 +29,19 @@ Focus on facts a friend would remember:
 - Languages they speak
 
 Rules:
-- Only extract facts about the USER, never about Insult
+- Only extract facts about the TARGET USER, never about Insult or other users
+- CRITICAL: Preserve WHO said/did WHAT. If Alex told Insult something, that's Alex→Insult, NOT Alex→Bernard
 - Each fact must be a short, standalone sentence (max 15 words)
 - Use the language the user predominantly speaks (Spanish or English)
 - If the user corrects a previous fact, use the corrected version
 - Ignore greetings, small talk, and filler with no factual content
 - If no new facts are found, return the existing facts unchanged
+- Messages are prefixed with speaker names (e.g. "bernard2389: text"). Use these to track who said what
 
 You will receive:
-1. The user's display name
+1. The target user's display name
 2. Their existing facts (may be empty)
-3. Recent conversation messages
+3. Recent conversation messages (with speaker labels)
 
 Return a JSON array of objects with "fact" and "category" keys.
 Categories: identity, profession, location, interests, technical, personal, preferences
