@@ -58,15 +58,23 @@ def sanitize(text: str) -> str:
     return result if result else text
 
 
-# Pattern to strip leaked metadata from model output (timestamps, speaker labels)
-_METADATA_PREFIX = re.compile(r"^\[(?:justo ahora|hace \d+\s*\w+|ayer)\]\s*", re.MULTILINE)
-_SPEAKER_PREFIX = re.compile(r"^(?:Insult|insult)\s*:\s*", re.MULTILINE)
+# Patterns to strip leaked metadata from model output (timestamps, speaker labels)
+_METADATA_PATTERNS = [
+    # [timestamp] Speaker: — full combo (most common leak)
+    re.compile(r"^\[.*?\]\s*(?:Insult|insult)\s*:\s*", re.MULTILINE),
+    # [timestamp] alone
+    re.compile(r"^\[(?:justo ahora|hace\s+\S+(?:\s+\S+)?|ayer)\]\s*", re.MULTILINE),
+    # Speaker: alone at start of line
+    re.compile(r"^(?:Insult|insult)\s*:\s*", re.MULTILINE),
+    # [SEND] that leaked into visible text
+    re.compile(r"\[SEND\]", re.IGNORECASE),
+]
 
 
 def strip_metadata(text: str) -> str:
     """Remove leaked timestamps and speaker labels from model output."""
-    text = _METADATA_PREFIX.sub("", text)
-    text = _SPEAKER_PREFIX.sub("", text)
+    for pattern in _METADATA_PATTERNS:
+        text = pattern.sub("", text)
     return text.strip()
 
 

@@ -26,7 +26,7 @@ MESSAGE_DELIMITER = "[SEND]"
 TYPING_CHARS_PER_SECOND = 50  # ~250 CPM, fast mobile typing speed
 MIN_TYPING_DELAY = 0.8
 MAX_TYPING_DELAY = 5.0
-VERSION_TAG = "ᵇᵉᵗᵃ ᵛ⁰·⁴·⁰"  # superscript unicode — visible but unobtrusive
+VERSION_TAG = "ᵇᵉᵗᵃ ᵛ⁰·⁴·¹"  # superscript unicode — visible but unobtrusive
 
 
 class ChatCog(commands.Cog):
