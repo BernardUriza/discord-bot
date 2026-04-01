@@ -58,6 +58,18 @@ def sanitize(text: str) -> str:
     return result if result else text
 
 
+# Pattern to strip leaked metadata from model output (timestamps, speaker labels)
+_METADATA_PREFIX = re.compile(r"^\[(?:justo ahora|hace \d+\s*\w+|ayer)\]\s*", re.MULTILINE)
+_SPEAKER_PREFIX = re.compile(r"^(?:Insult|insult)\s*:\s*", re.MULTILINE)
+
+
+def strip_metadata(text: str) -> str:
+    """Remove leaked timestamps and speaker labels from model output."""
+    text = _METADATA_PREFIX.sub("", text)
+    text = _SPEAKER_PREFIX.sub("", text)
+    return text.strip()
+
+
 def _get_current_time_context() -> str:
     """Build a human-readable current time string for the system prompt (Mexico City timezone)."""
     from zoneinfo import ZoneInfo
@@ -103,6 +115,10 @@ def build_adaptive_prompt(base_prompt: str, profile, context_len: int) -> str:
     time_ctx = _get_current_time_context()
     prompt += (
         f"\n\n## Current Time\nRight now it is: {time_ctx}. Use this naturally — don't announce it unless relevant."
+        "\n\nIMPORTANT: The conversation messages include metadata like [hace 2h] timestamps and "
+        "speaker labels (e.g. 'bernard2389:'). These are for YOUR context only. "
+        "NEVER reproduce timestamps, speaker labels, or '[SEND]' markers in your responses. "
+        "Just respond as pure text — no prefixes, no metadata, no formatting artifacts."
     )
 
     # Style adaptation — only if we have enough data

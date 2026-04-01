@@ -6,7 +6,7 @@ import anthropic
 import structlog
 from anthropic.types import MessageParam
 
-from insult.core.character import CHARACTER_REINFORCEMENT, detect_break, sanitize
+from insult.core.character import CHARACTER_REINFORCEMENT, detect_break, sanitize, strip_metadata
 
 log = structlog.get_logger()
 
@@ -75,6 +75,9 @@ class LLMClient:
         """Send messages, detect character breaks, retry if needed."""
         response = await self._send(system_prompt, messages)
 
+        # Strip leaked metadata (timestamps, speaker labels) before any other processing
+        response = strip_metadata(response)
+
         breaks = detect_break(response)
         if breaks:
             log.warning("character_break_detected", patterns=breaks)
@@ -82,6 +85,7 @@ class LLMClient:
             reinforced_prompt = system_prompt + CHARACTER_REINFORCEMENT
             try:
                 retry_response = await self._send(reinforced_prompt, messages)
+                retry_response = strip_metadata(retry_response)
                 retry_breaks = detect_break(retry_response)
 
                 if not retry_breaks:
