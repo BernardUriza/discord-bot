@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from insult.cogs.chat import MAX_MESSAGE_LENGTH, ChatCog
+from insult.core.llm import LLMResponse
 
 
 class TestChatCog:
@@ -34,7 +35,7 @@ class TestChatCog:
         cog.llm.chat.assert_called_once()
 
     async def test_stores_user_message(self, cog, mock_ctx):
-        cog.llm.chat = AsyncMock(return_value="respuesta")
+        cog.llm.chat = AsyncMock(return_value=LLMResponse(text="respuesta"))
         await self._call_chat(cog, mock_ctx, "hola wey")
         cog.memory.store.assert_any_call(
             str(mock_ctx.message.channel.id),
@@ -45,18 +46,18 @@ class TestChatCog:
         )
 
     async def test_updates_user_profile(self, cog, mock_ctx):
-        cog.llm.chat = AsyncMock(return_value="respuesta")
+        cog.llm.chat = AsyncMock(return_value=LLMResponse(text="respuesta"))
         await self._call_chat(cog, mock_ctx, "hola wey")
         cog.memory.update_profile.assert_called_once_with(str(mock_ctx.author.id), "hola wey")
 
     async def test_sends_llm_response(self, cog, mock_ctx):
-        cog.llm.chat = AsyncMock(return_value="Eres un pendejo.")
+        cog.llm.chat = AsyncMock(return_value=LLMResponse(text="Eres un pendejo."))
         await self._call_chat(cog, mock_ctx, "ayudame")
         sent_text = " ".join(str(c) for c in self._channel_send(mock_ctx).call_args_list)
         assert "Eres un pendejo." in sent_text
 
     async def test_stores_assistant_response(self, cog, mock_ctx):
-        cog.llm.chat = AsyncMock(return_value="respuesta del bot")
+        cog.llm.chat = AsyncMock(return_value=LLMResponse(text="respuesta del bot"))
         await self._call_chat(cog, mock_ctx, "hola")
         cog.memory.store.assert_any_call(
             str(mock_ctx.message.channel.id),
@@ -81,13 +82,13 @@ class TestChatCog:
     async def test_handles_profile_failure_gracefully(self, cog, mock_ctx):
         """Profile update failure should NOT block the chat flow."""
         cog.memory.update_profile = AsyncMock(side_effect=Exception("DB error"))
-        cog.llm.chat = AsyncMock(return_value="sigo funcionando")
+        cog.llm.chat = AsyncMock(return_value=LLMResponse(text="sigo funcionando"))
         await self._call_chat(cog, mock_ctx, "hola")
         cog.llm.chat.assert_called_once()
 
     async def test_chunks_long_responses(self, cog, mock_ctx):
         long_response = "A" * 4000
-        cog.llm.chat = AsyncMock(return_value=long_response)
+        cog.llm.chat = AsyncMock(return_value=LLMResponse(text=long_response))
         await self._call_chat(cog, mock_ctx, "hola")
         send_calls = self._channel_send(mock_ctx).call_args_list
         assert len(send_calls) >= 2

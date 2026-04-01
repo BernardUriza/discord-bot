@@ -1,14 +1,38 @@
-"""Claude API client with character break detection."""
+"""Claude API client with character break detection and tool_use support."""
 
 import asyncio
+from dataclasses import dataclass, field
 
 import anthropic
 import structlog
 from anthropic.types import MessageParam
 
+from insult.core.actions import ToolCall
 from insult.core.character import CHARACTER_REINFORCEMENT, detect_anti_patterns, detect_break, sanitize, strip_metadata
 
 log = structlog.get_logger()
+
+
+@dataclass
+class LLMResponse:
+    """Structured response from the LLM — text + optional tool calls."""
+
+    text: str
+    tool_calls: list[ToolCall] = field(default_factory=list)
+
+
+def _parse_response_content(content: list) -> LLMResponse:
+    """Extract text and tool_use blocks from Claude API response content."""
+    text_parts: list[str] = []
+    tool_calls: list[ToolCall] = []
+
+    for block in content:
+        if hasattr(block, "text"):
+            text_parts.append(block.text)
+        elif block.type == "tool_use":
+            tool_calls.append(ToolCall(id=block.id, name=block.name, input=block.input))
+
+    return LLMResponse(text="\n".join(text_parts).strip(), tool_calls=tool_calls)
 
 
 class LLMClient:
@@ -18,20 +42,28 @@ class LLMClient:
         self.max_tokens = max_tokens
         self.max_retries = max_retries
 
-    async def _send(self, system_prompt: str, messages: list[MessageParam]) -> str:
+    async def _send(
+        self, system_prompt: str, messages: list[MessageParam], *, tools: list[dict] | None = None
+    ) -> LLMResponse:
         """Raw API call with retry logic for transient errors."""
         last_error = None
 
         for attempt in range(1, self.max_retries + 1):
             try:
                 log.info("llm_request", model=self.model, attempt=attempt, messages=len(messages))
-                response = await self.client.messages.create(
-                    model=self.model,
-                    max_tokens=self.max_tokens,
-                    system=system_prompt,
-                    messages=messages,
-                    cache_control={"type": "ephemeral"},
-                )
+                kwargs = {
+                    "model": self.model,
+                    "max_tokens": self.max_tokens,
+                    "system": system_prompt,
+                    "messages": messages,
+                    "cache_control": {"type": "ephemeral"},
+                }
+                if tools:
+                    kwargs["tools"] = tools
+                    # tool_choice="auto" lets Claude decide when to use tools
+                    # AND still emit text alongside tool_use blocks
+
+                response = await self.client.messages.create(**kwargs)
                 cache_read = getattr(response.usage, "cache_read_input_tokens", 0) or 0
                 cache_create = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
                 log.info(
@@ -43,8 +75,7 @@ class LLMClient:
                     cache_create=cache_create,
                     stop_reason=response.stop_reason,
                 )
-                block = response.content[0]
-                return block.text if hasattr(block, "text") else str(block)
+                return _parse_response_content(response.content)
 
             except anthropic.RateLimitError as e:
                 last_error = e
@@ -71,37 +102,47 @@ class LLMClient:
         log.error("llm_failed", attempts=self.max_retries, last_error=str(last_error))
         raise last_error
 
-    async def chat(self, system_prompt: str, messages: list[MessageParam]) -> str:
-        """Send messages, detect character breaks, retry if needed."""
-        response = await self._send(system_prompt, messages)
+    async def chat(
+        self, system_prompt: str, messages: list[MessageParam], *, tools: list[dict] | None = None
+    ) -> LLMResponse:
+        """Send messages with optional tools, detect character breaks, retry if needed.
+
+        Returns LLMResponse with text (for Discord) and tool_calls (for actions).
+        """
+        response = await self._send(system_prompt, messages, tools=tools)
 
         # Strip leaked metadata (timestamps, speaker labels) before any other processing
-        response = strip_metadata(response)
+        response.text = strip_metadata(response.text)
 
-        breaks = detect_break(response)
+        breaks = detect_break(response.text)
         if breaks:
             log.warning("character_break_detected", patterns=breaks)
 
             reinforced_prompt = system_prompt + CHARACTER_REINFORCEMENT
             try:
-                retry_response = await self._send(reinforced_prompt, messages)
-                retry_response = strip_metadata(retry_response)
-                retry_breaks = detect_break(retry_response)
+                retry_response = await self._send(reinforced_prompt, messages, tools=tools)
+                retry_response.text = strip_metadata(retry_response.text)
+                retry_breaks = detect_break(retry_response.text)
 
                 if not retry_breaks:
                     log.info("character_break_fixed_on_retry")
                     return retry_response
 
                 log.warning("character_break_persisted", retry_patterns=retry_breaks)
-                return sanitize(retry_response)
+                retry_response.text = sanitize(retry_response.text)
+                return retry_response
 
             except Exception:
                 log.warning("character_break_retry_failed_using_sanitized_original")
-                return sanitize(response)
+                response.text = sanitize(response.text)
+                return response
 
         # Log anti-pattern drift (soft violations — doesn't block, just monitors)
-        anti_patterns = detect_anti_patterns(response)
+        anti_patterns = detect_anti_patterns(response.text)
         if anti_patterns:
             log.warning("anti_pattern_detected", patterns=anti_patterns)
+
+        if response.tool_calls:
+            log.info("tool_calls_detected", tools=[tc.name for tc in response.tool_calls])
 
         return response

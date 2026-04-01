@@ -13,7 +13,7 @@ import discord
 import structlog
 from discord.ext import commands
 
-from insult.core.actions import execute_create_channel, parse_actions, strip_actions
+from insult.core.actions import CHANNEL_TOOLS, execute_create_channel
 from insult.core.attachments import process_attachments
 from insult.core.character import build_adaptive_prompt
 from insult.core.errors import classify_error, get_error_response
@@ -31,7 +31,7 @@ MESSAGE_DELIMITER = "[SEND]"
 TYPING_CHARS_PER_SECOND = 50  # ~250 CPM, fast mobile typing speed
 MIN_TYPING_DELAY = 0.8
 MAX_TYPING_DELAY = 5.0
-VERSION_TAG = "ᵇᵉᵗᵃ ᵛ⁰·⁶·⁰"  # superscript unicode — visible but unobtrusive
+VERSION_TAG = "ᵇᵉᵗᵃ ᵛ⁰·⁷·⁰"  # superscript unicode — visible but unobtrusive
 
 # Reaction system — [REACT:💀,🔥] parsed from LLM response
 REACTION_PATTERN = re.compile(r"\[REACT:([^\]]*)\]", re.IGNORECASE)
@@ -231,17 +231,17 @@ class ChatCog(commands.Cog):
 
         try:
             async with message.channel.typing():
-                response = await self.llm.chat(system_prompt, context)
+                llm_response = await self.llm.chat(system_prompt, context, tools=CHANNEL_TOOLS)
         except Exception as e:
             log.exception("chat_llm_failed", channel_id=channel_id, error_type=type(e).__name__)
             await message.channel.send(get_error_response(classify_error(e)))
             return
 
-        # Extract emoji reactions and actions before any text processing
+        response = llm_response.text
+
+        # Extract emoji reactions from text (cosmetic — text markers are fine for this)
         reactions = parse_reactions(response)
         response = strip_reactions(response)
-        actions = parse_actions(response)
-        response = strip_actions(response)
 
         # Store the full response (without delimiters) in memory
         clean_response = response.replace(MESSAGE_DELIMITER, "\n")
@@ -258,16 +258,16 @@ class ChatCog(commands.Cog):
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
 
-        # Execute server actions in background (channel creation, etc.)
-        if actions and message.guild:
-            task = asyncio.create_task(self._execute_actions(message, actions))
+        # Execute tool_use actions in background (channel creation, etc.)
+        if llm_response.tool_calls and message.guild:
+            task = asyncio.create_task(self._execute_tool_calls(message, llm_response.tool_calls))
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
 
         # Send as multiple messages with typing delay if LLM used [SEND] delimiter
         parts = [p.strip() for p in response.split(MESSAGE_DELIMITER) if p.strip()]
         if not parts:
-            parts = [] if reactions else [response.strip() or "..."]
+            parts = [] if (reactions or llm_response.tool_calls) else [response.strip() or "..."]
         for i, part in enumerate(parts):
             # Append version tag to the very last chunk of the last part
             is_last_part = i == len(parts) - 1
@@ -288,20 +288,20 @@ class ChatCog(commands.Cog):
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 
-    async def _execute_actions(self, message: discord.Message, actions: list):
-        """Background task: execute server actions (channel creation, etc.)."""
-        for action in actions:
-            if action.action_type == "create_channel" and message.guild:
+    async def _execute_tool_calls(self, message: discord.Message, tool_calls: list):
+        """Background task: execute tool_use calls from Claude (channel creation, etc.)."""
+        for tool_call in tool_calls:
+            if tool_call.name == "create_channel" and message.guild:
                 try:
-                    channel = await execute_create_channel(message.guild, action, message.author)
+                    channel = await execute_create_channel(message.guild, tool_call, message.author)
                     if channel:
                         await message.channel.send(f"Listo, ahí está: {channel.mention}")
                     else:
-                        log.warning("action_channel_creation_returned_none", action=action)
+                        log.warning("tool_call_returned_none", tool=tool_call.name)
                 except Exception:
-                    log.exception("action_execution_failed", action_type=action.action_type)
+                    log.exception("tool_call_execution_failed", tool=tool_call.name)
             else:
-                log.warning("action_unknown_type", action_type=action.action_type)
+                log.warning("tool_call_unknown", tool=tool_call.name)
 
     async def _add_reactions(self, message: discord.Message, emojis: list[str]):
         """Background task: add emoji reactions to the user's message with human-like delay."""

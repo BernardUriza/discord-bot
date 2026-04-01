@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from insult.core.llm import LLMResponse
 from insult.core.style import UserStyleProfile
 
 # --- Mock Container ---
@@ -31,7 +32,7 @@ def mock_memory():
 def mock_llm():
     """Mocked LLMClient."""
     llm = AsyncMock()
-    llm.chat = AsyncMock(return_value="Test response from Insult")
+    llm.chat = AsyncMock(return_value=LLMResponse(text="Test response from Insult"))
     return llm
 
 

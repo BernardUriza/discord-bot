@@ -1,9 +1,8 @@
-"""Generic action system — LLM outputs [ACTION:type|key=value] markers that trigger bot actions.
+"""Action system — Claude tool_use for real Discord actions (channel creation, etc.).
 
-Currently supports:
-- create_channel: Create text channels, private channels, or categories
-
-Extensible for future actions (invite_user, archive_channel, etc.)
+Uses Claude's native tool_use with strict:true for guaranteed schema compliance.
+Text markers ([SEND], [REACT:]) remain for cosmetic features.
+Side-effect actions use tool_use because reliability is critical.
 """
 
 import asyncio
@@ -19,11 +18,43 @@ log = structlog.get_logger()
 # Constants
 # ---------------------------------------------------------------------------
 
-ACTION_PATTERN = re.compile(r"\[ACTION:([^\]]+)\]", re.IGNORECASE)
 MAX_ACTIONS_PER_RESPONSE = 2  # Safety: prevent LLM from creating 50 channels
 VALID_CHANNEL_TYPES = {"private", "topic", "category"}
 CHANNEL_NAME_MAX_LEN = 100
 CHANNEL_LIMIT_BUFFER = 50  # Don't create if guild has >= 500 - buffer channels
+
+# ---------------------------------------------------------------------------
+# Tool definitions for Claude API (strict: true = guaranteed schema compliance)
+# ---------------------------------------------------------------------------
+
+CHANNEL_TOOLS = [
+    {
+        "name": "create_channel",
+        "description": (
+            "Create a Discord channel in the server. Use when a user explicitly asks for a new channel, "
+            "a private space, or a topic-specific area. Types: 'private' (only user + you can see it), "
+            "'topic' (visible to everyone), 'category' (channel category). "
+            "ONLY use when the user clearly wants a channel created — not for hypothetical discussions."
+        ),
+        "strict": True,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Channel name: lowercase, hyphens, no spaces. E.g. 'ciencia-y-mates', 'espacio-privado'",
+                },
+                "channel_type": {
+                    "type": "string",
+                    "enum": ["private", "topic", "category"],
+                    "description": "private=only user+bot can see, topic=visible to all, category=channel grouping",
+                },
+            },
+            "required": ["name", "channel_type"],
+            "additionalProperties": False,
+        },
+    },
+]
 
 
 # ---------------------------------------------------------------------------
@@ -32,46 +63,12 @@ CHANNEL_LIMIT_BUFFER = 50  # Don't create if guild has >= 500 - buffer channels
 
 
 @dataclass
-class BotAction:
-    """A parsed action from the LLM response."""
+class ToolCall:
+    """A tool_use block from the Claude API response."""
 
-    action_type: str
-    params: dict[str, str]
-
-
-# ---------------------------------------------------------------------------
-# Parsing
-# ---------------------------------------------------------------------------
-
-
-def parse_actions(response: str) -> list[BotAction]:
-    """Extract [ACTION:type|key=val|key=val] markers from LLM response.
-
-    Returns at most MAX_ACTIONS_PER_RESPONSE actions.
-    """
-    matches = ACTION_PATTERN.findall(response)
-    actions: list[BotAction] = []
-
-    for raw in matches[:MAX_ACTIONS_PER_RESPONSE]:
-        parts = [p.strip() for p in raw.split("|") if p.strip()]
-        if not parts:
-            continue
-
-        action_type = parts[0].lower()
-        params: dict[str, str] = {}
-        for part in parts[1:]:
-            if "=" in part:
-                key, _, value = part.partition("=")
-                params[key.strip().lower()] = value.strip()
-
-        actions.append(BotAction(action_type=action_type, params=params))
-
-    return actions
-
-
-def strip_actions(response: str) -> str:
-    """Remove [ACTION:...] markers from the response text."""
-    return ACTION_PATTERN.sub("", response).strip()
+    id: str
+    name: str
+    input: dict
 
 
 # ---------------------------------------------------------------------------
@@ -99,15 +96,10 @@ def sanitize_channel_name(name: str) -> str:
 
 async def execute_create_channel(
     guild: discord.Guild,
-    action: BotAction,
+    tool_call: ToolCall,
     requesting_user: discord.Member,
 ) -> discord.abc.GuildChannel | None:
-    """Create a Discord channel based on action params.
-
-    Params:
-        name: Channel name (will be sanitized)
-        type: "private" (user + bot only), "topic" (public), "category"
-        for: Optional display name of the user to grant access (defaults to requesting_user)
+    """Create a Discord channel based on tool_call input.
 
     Returns the created channel, or None on failure.
     """
@@ -122,13 +114,13 @@ async def execute_create_channel(
         log.warning("action_channel_limit", current=len(guild.channels), guild=guild.name)
         return None
 
-    raw_name = action.params.get("name", "nuevo-canal")
+    raw_name = tool_call.input.get("name", "nuevo-canal")
     channel_name = sanitize_channel_name(raw_name)
-    channel_type = action.params.get("type", "private").lower()
+    channel_type = tool_call.input.get("channel_type", "private")
 
     if channel_type not in VALID_CHANNEL_TYPES:
         log.warning("action_invalid_channel_type", type=channel_type)
-        channel_type = "private"  # safe default
+        channel_type = "private"
 
     try:
         if channel_type == "category":
