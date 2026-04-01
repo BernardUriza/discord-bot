@@ -113,9 +113,9 @@ class VoiceCog(commands.Cog):
 
             vc.play(
                 audio_source,
-                after=lambda e: log.info("tts_playback_done")
-                if not e
-                else log.error("tts_playback_error", error=str(e)),
+                after=lambda e: (
+                    log.info("tts_playback_done") if not e else log.error("tts_playback_error", error=str(e))
+                ),
             )
             log.info("tts_playing", channel=voice_channel.name, text_len=len(text))
 
