@@ -9,7 +9,9 @@ from discord.ext import commands, tasks
 from insult.app import Container, create_app
 from insult.cogs import ChatCog, UtilityCog
 from insult.core.backup import download_db, is_azure_configured, upload_db
+from insult.core.character import _get_current_time_context, strip_metadata
 from insult.core.errors import get_error_response
+from insult.core.proactive import generate_proactive_message, should_send_now
 
 log = structlog.get_logger()
 
@@ -49,6 +51,71 @@ def _build(container: Container):
             except Exception:
                 log.exception("azure_backup_failed")
 
+    # --- Proactive Messaging (check every 30 min, send ~every 2-3h) ---
+    _last_proactive_ts: float | None = None
+
+    @tasks.loop(minutes=30)
+    async def _proactive_task():
+        nonlocal _last_proactive_ts
+        from datetime import datetime as dt
+        from zoneinfo import ZoneInfo
+
+        now = dt.now(ZoneInfo("America/Mexico_City"))
+
+        if not should_send_now(now.hour, _last_proactive_ts):
+            return
+
+        # Find the most recently active text channel
+        target_channel = None
+        latest_ts = 0
+        for guild in bot.guilds:
+            for channel in guild.text_channels:
+                try:
+                    stats = await memory.get_stats(str(channel.id))
+                    if stats["total_messages"] and stats["total_messages"] > latest_ts:
+                        latest_ts = stats["total_messages"]
+                        target_channel = channel
+                except Exception:
+                    log.debug("proactive_channel_skip", channel=channel.name)
+
+        if not target_channel:
+            return
+
+        # Gather user facts for all known users
+        try:
+            all_user_data = await memory.get_all_user_messages(limit_per_user=5)
+            user_facts = {}
+            for uid, data in all_user_data.items():
+                facts = await memory.get_facts(uid)
+                if facts:
+                    user_facts[data["user_name"]] = facts
+
+            recent = await memory.get_recent(str(target_channel.id), limit=5)
+            recent_summary = "\n".join(f"{m['user_name']}: {m['content'][:80]}" for m in recent) if recent else ""
+        except Exception:
+            log.exception("proactive_context_failed")
+            return
+
+        time_str = _get_current_time_context()
+        msg = await generate_proactive_message(
+            container.llm.client, container.settings.llm_model, time_str, user_facts, recent_summary
+        )
+
+        if msg:
+            msg = strip_metadata(msg)
+            try:
+                parts = [p.strip() for p in msg.split("[SEND]") if p.strip()]
+                for part in parts:
+                    await target_channel.send(part)
+                _last_proactive_ts = dt.now().timestamp()
+                # Store in memory
+                await memory.store(
+                    str(target_channel.id), str(bot.user.id), bot.user.name, "assistant", msg.replace("[SEND]", "\n")
+                )
+                log.info("proactive_message_sent", channel=target_channel.name, length=len(msg))
+            except Exception:
+                log.exception("proactive_send_failed")
+
     # --- Health Check ---
     @tasks.loop(seconds=60)
     async def _health_check():
@@ -79,6 +146,7 @@ def _build(container: Container):
             await bot.add_cog(ChatCog(container))
             await bot.add_cog(UtilityCog(container))
             _health_check.start()
+            _proactive_task.start()
             if is_azure_configured():
                 _backup_task.start()
             _ready_fired = True
