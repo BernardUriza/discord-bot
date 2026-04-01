@@ -36,7 +36,6 @@ CHANNEL_TOOLS = [
             "'topic' (visible to everyone), 'category' (channel category). "
             "ONLY use when the user clearly wants a channel created — not for hypothetical discussions."
         ),
-        "strict": True,
         "input_schema": {
             "type": "object",
             "properties": {

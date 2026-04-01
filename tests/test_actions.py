@@ -19,9 +19,6 @@ class TestChannelTools:
         assert len(CHANNEL_TOOLS) == 1
         assert CHANNEL_TOOLS[0]["name"] == "create_channel"
 
-    def test_strict_enabled(self):
-        assert CHANNEL_TOOLS[0]["strict"] is True
-
     def test_required_fields(self):
         schema = CHANNEL_TOOLS[0]["input_schema"]
         assert "name" in schema["properties"]
