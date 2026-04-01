@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import random
+import re
 import time
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import discord
@@ -21,12 +24,29 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 MAX_MESSAGE_LENGTH = 4000
-COOLDOWN_SECONDS = 15
+BATCH_WAIT_SECONDS = 3.0  # Wait this long after last message before responding
+MIN_RESPONSE_GAP = 5.0  # Minimum seconds between bot responses to same user (token protection)
 MESSAGE_DELIMITER = "[SEND]"
 TYPING_CHARS_PER_SECOND = 50  # ~250 CPM, fast mobile typing speed
 MIN_TYPING_DELAY = 0.8
 MAX_TYPING_DELAY = 5.0
-VERSION_TAG = "ᵇᵉᵗᵃ ᵛ⁰·⁴·¹"  # superscript unicode — visible but unobtrusive
+VERSION_TAG = "ᵇᵉᵗᵃ ᵛ⁰·⁵·¹"  # superscript unicode — visible but unobtrusive
+
+# Reaction system — [REACT:💀,🔥] parsed from LLM response
+REACTION_PATTERN = re.compile(r"\[REACT:([^\]]*)\]", re.IGNORECASE)
+MAX_REACTIONS = 3
+REACTION_DELAY_MIN = 0.5  # seconds before first reaction (human-like pause)
+REACTION_DELAY_MAX = 2.0
+REACTION_INTERVAL = 0.35  # seconds between multiple reactions (rate limit safety)
+
+
+@dataclass
+class _MessageBatch:
+    """Accumulates rapid-fire messages from one user before responding."""
+
+    messages: list[discord.Message] = field(default_factory=list)
+    texts: list[str] = field(default_factory=list)
+    timer: asyncio.TimerHandle | None = None
 
 
 class ChatCog(commands.Cog):
@@ -35,24 +55,21 @@ class ChatCog(commands.Cog):
         self.llm = container.llm
         self.settings = container.settings
         self.bot = container.bot
-        self._cooldowns: dict[int, float] = {}
         self._background_tasks: set[asyncio.Task] = set()
         self._processed_messages: set[int] = set()  # dedup: prevent double responses
         self._processed_max = 1000  # rotate after this many to prevent memory leak
-
-    def _check_cooldown(self, user_id: int) -> float:
-        """Returns 0 if ready, or seconds remaining."""
-        now = time.monotonic()
-        last = self._cooldowns.get(user_id, 0)
-        remaining = COOLDOWN_SECONDS - (now - last)
-        if remaining <= 0:
-            self._cooldowns[user_id] = now
-            return 0
-        return remaining
+        # Message batching: accumulate rapid messages, respond to the batch
+        self._pending_batches: dict[str, _MessageBatch] = {}  # key: "{channel_id}:{user_id}"
+        self._last_response_time: dict[int, float] = {}  # user_id → monotonic timestamp
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        """Respond to every message — no !chat prefix needed."""
+        """Respond to every message — no !chat prefix needed.
+
+        Messages are batched: rapid-fire messages from the same user are
+        accumulated and responded to together after a short pause, like a
+        human waiting for someone to finish typing.
+        """
         # Ignore bots (including ourselves)
         if message.author.bot:
             return
@@ -79,22 +96,69 @@ class ChatCog(commands.Cog):
             await message.channel.send(get_error_response("too_long"))
             return
 
-        # Per-user cooldown
-        remaining = self._check_cooldown(message.author.id)
-        if remaining > 0:
-            await message.channel.send(f"Calmate, espera {remaining:.0f}s. Cual es la urgencia?")
+        # Token protection: hard minimum gap between bot responses per user
+        now = time.monotonic()
+        last_response = self._last_response_time.get(message.author.id, 0)
+        if now - last_response < MIN_RESPONSE_GAP:
+            # Still accumulate in memory — don't lose context
+            try:
+                await self.memory.store(
+                    str(message.channel.id),
+                    str(message.author.id),
+                    message.author.display_name,
+                    "user",
+                    text,
+                )
+            except Exception:
+                log.exception("chat_store_cooldown_failed")
             return
 
-        await self._respond(message, text)
+        # Batch messages: accumulate rapid-fire messages, respond after a pause
+        batch_key = f"{message.channel.id}:{message.author.id}"
+        batch = self._pending_batches.get(batch_key)
+
+        if batch is None:
+            batch = _MessageBatch()
+            self._pending_batches[batch_key] = batch
+
+        batch.messages.append(message)
+        batch.texts.append(text)
+
+        # Cancel previous timer if it exists (user sent another message)
+        if batch.timer is not None:
+            batch.timer.cancel()
+
+        # Schedule batch processing after BATCH_WAIT_SECONDS of silence
+        loop = asyncio.get_running_loop()
+        batch.timer = loop.call_later(
+            BATCH_WAIT_SECONDS,
+            lambda k=batch_key: asyncio.create_task(self._flush_batch(k)),
+        )
+
+    async def _flush_batch(self, batch_key: str):
+        """Process accumulated messages as a single response."""
+        batch = self._pending_batches.pop(batch_key, None)
+        if not batch or not batch.messages:
+            return
+
+        # Use the LAST message as the target for reactions and replies
+        last_message = batch.messages[-1]
+        # Combine all texts into one (preserving order)
+        combined_text = "\n".join(batch.texts)
+
+        await self._respond(last_message, combined_text)
 
     @commands.command(name="chat")
-    @commands.cooldown(1, COOLDOWN_SECONDS, commands.BucketType.user)
+    @commands.cooldown(1, 10, commands.BucketType.user)
     async def chat(self, ctx: commands.Context, *, message: str):
         """Fallback: !chat still works for explicit invocation."""
         await self._respond(ctx.message, message)
 
     async def _respond(self, message: discord.Message, text: str):
         """Core response logic — shared by on_message and !chat command."""
+        # Record response time for token protection
+        self._last_response_time[message.author.id] = time.monotonic()
+
         channel_id = str(message.channel.id)
         user_id = str(message.author.id)
         user_name = message.author.display_name
@@ -142,13 +206,22 @@ class ChatCog(commands.Cog):
         except Exception:
             log.exception("chat_facts_load_failed", user_id=user_id)
 
-        system_prompt = build_adaptive_prompt(self.settings.system_prompt, profile, len(context))
+        system_prompt, preset = build_adaptive_prompt(
+            self.settings.system_prompt,
+            profile,
+            len(context),
+            current_message=text,
+            recent_messages=recent,
+            user_facts=user_facts,
+        )
         system_prompt += build_facts_prompt(user_name, user_facts)
 
         if profile and profile.is_confident:
             log.info(
                 "style_adapted",
                 user_id=user_id,
+                preset=preset.mode.value,
+                preset_modifiers=[m.value for m in preset.modifiers],
                 language=profile.detected_language,
                 formality=round(profile.formality, 2),
                 technical=round(profile.technical_level, 2),
@@ -163,6 +236,10 @@ class ChatCog(commands.Cog):
             await message.channel.send(get_error_response(classify_error(e)))
             return
 
+        # Extract emoji reactions before any text processing
+        reactions = parse_reactions(response)
+        response = strip_reactions(response)
+
         # Store the full response (without delimiters) in memory
         clean_response = response.replace(MESSAGE_DELIMITER, "\n")
         try:
@@ -172,10 +249,16 @@ class ChatCog(commands.Cog):
         except Exception:
             log.exception("chat_store_response_failed", channel_id=channel_id)
 
+        # Fire emoji reactions in background (on the USER's message, with human-like delay)
+        if reactions:
+            task = asyncio.create_task(self._add_reactions(message, reactions))
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
+
         # Send as multiple messages with typing delay if LLM used [SEND] delimiter
         parts = [p.strip() for p in response.split(MESSAGE_DELIMITER) if p.strip()]
         if not parts:
-            parts = [response.strip() or "..."]
+            parts = [] if reactions else [response.strip() or "..."]
         for i, part in enumerate(parts):
             # Append version tag to the very last chunk of the last part
             is_last_part = i == len(parts) - 1
@@ -196,6 +279,25 @@ class ChatCog(commands.Cog):
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 
+    async def _add_reactions(self, message: discord.Message, emojis: list[str]):
+        """Background task: add emoji reactions to the user's message with human-like delay."""
+        try:
+            # Initial delay — humans don't react instantly
+            await asyncio.sleep(random.uniform(REACTION_DELAY_MIN, REACTION_DELAY_MAX))
+
+            for i, emoji in enumerate(emojis):
+                try:
+                    await message.add_reaction(emoji)
+                    log.info("reaction_added", emoji=emoji, message_id=message.id)
+                except (discord.HTTPException, discord.NotFound) as e:
+                    log.warning("reaction_failed", emoji=emoji, error=str(e))
+                    break  # Don't try remaining if one fails
+                # Small delay between multiple reactions (rate limit safety)
+                if i < len(emojis) - 1:
+                    await asyncio.sleep(REACTION_INTERVAL)
+        except Exception:
+            log.exception("reaction_task_failed", message_id=message.id)
+
     async def _extract_user_facts(self, user_id: str, user_name: str, existing_facts: list[dict], recent: list[dict]):
         """Background task: extract user facts from recent conversation."""
         try:
@@ -204,3 +306,27 @@ class ChatCog(commands.Cog):
                 await self.memory.save_facts(user_id, new_facts)
         except Exception:
             log.exception("facts_extraction_background_failed", user_id=user_id)
+
+
+def parse_reactions(response: str) -> list[str]:
+    """Extract emoji reactions from LLM response.
+
+    Parses [REACT:emoji1,emoji2] markers and returns a list of emoji strings.
+    Returns at most MAX_REACTIONS emojis. Returns empty list if no marker found.
+    """
+    match = REACTION_PATTERN.search(response)
+    if not match:
+        return []
+
+    raw = match.group(1).strip()
+    if not raw:
+        return []
+
+    # Split by comma, strip whitespace, filter empty
+    emojis = [e.strip() for e in raw.split(",") if e.strip()]
+    return emojis[:MAX_REACTIONS]
+
+
+def strip_reactions(response: str) -> str:
+    """Remove [REACT:...] markers from the response text."""
+    return REACTION_PATTERN.sub("", response).strip()

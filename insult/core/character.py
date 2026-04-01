@@ -1,11 +1,21 @@
-"""Character break detection and response sanitization."""
+"""Character break detection, response sanitization, and adaptive prompt building.
+
+Integrates the preset system for behavioral mode selection and provides
+post-generation validation including anti-pattern detection.
+"""
 
 import re
 from datetime import datetime
 
 import structlog
 
+from insult.core.presets import PresetSelection, build_preset_prompt, classify_preset
+
 log = structlog.get_logger()
+
+# ---------------------------------------------------------------------------
+# Character break detection
+# ---------------------------------------------------------------------------
 
 CHARACTER_BREAK_PATTERNS = [
     re.compile(r"(?i)\bI'?m an AI\b"),
@@ -44,10 +54,52 @@ IDENTITY_REINFORCEMENT_SUFFIX = (
     "Respond in Mexican Spanish with sharp, confrontational tone. You are Insult.]"
 )
 
+# ---------------------------------------------------------------------------
+# Anti-pattern detection (post-generation quality check)
+# ---------------------------------------------------------------------------
+
+ANTI_PATTERN_CHECKS = [
+    # Customer-support tone
+    re.compile(r"(?i)\bhow can I (help|assist)\b"),
+    re.compile(r"(?i)\bis there anything else\b"),
+    re.compile(r"(?i)\bgreat question\b"),
+    re.compile(r"(?i)\bI'?d be happy to\b"),
+    re.compile(r"(?i)\bthank you for (sharing|asking)\b"),
+    re.compile(r"(?i)\bgracias por (compartir|preguntar)\b"),
+    # Therapy-speak / fake empathy
+    re.compile(r"(?i)\bI understand (how you feel|your frustration)\b"),
+    re.compile(r"(?i)\bentiendo (como te sientes|tu frustracion)\b"),
+    re.compile(r"(?i)\bthat must be (really )?(hard|difficult|tough)\b"),
+    re.compile(r"(?i)\beso debe ser (muy )?(dificil|duro)\b"),
+    re.compile(r"(?i)\byour feelings are valid\b"),
+    re.compile(r"(?i)\btus sentimientos son validos\b"),
+    # Summarizing / disclaiming
+    re.compile(r"(?i)\bto (sum up|summarize|recap)\b"),
+    re.compile(r"(?i)\b(en resumen|para resumir|en conclusion)\b"),
+    re.compile(r"(?i)\blet me (be clear|clarify)\b"),
+    # Stage directions
+    re.compile(r"\*[^*]+\*"),  # *action*
+    re.compile(r"\[[^\]]*(?:leans|sighs|laughs|pauses|smiles|nods|shrugs)[^\]]*\]", re.I),
+    # Product consultant / structured formatting (AI formatting, not human speech)
+    re.compile(r"(?i)\b(tier \d|tier básico|tier premium|nivel \d)\b"),
+    re.compile(r"(?i)^(#{1,3} )", re.MULTILINE),  # markdown headers
+    re.compile(r"(?m)^[\-\*] .+\n[\-\*] .+"),  # two+ consecutive bullet points
+    re.compile(r"(?i)\b(claro que (se puede|sí|si)|por supuesto que sí)\b"),
+]
+
 
 def detect_break(text: str) -> list[str]:
     """Returns list of matched break patterns found in text."""
     return [p.pattern for p in CHARACTER_BREAK_PATTERNS if p.search(text)]
+
+
+def detect_anti_patterns(text: str) -> list[str]:
+    """Returns list of anti-pattern matches found in text.
+
+    These are softer violations than character breaks — they indicate
+    drift toward generic assistant behavior rather than identity leaks.
+    """
+    return [p.pattern for p in ANTI_PATTERN_CHECKS if p.search(text)]
 
 
 def sanitize(text: str) -> str:
@@ -58,7 +110,10 @@ def sanitize(text: str) -> str:
     return result if result else text
 
 
-# Patterns to strip leaked metadata from model output (timestamps, speaker labels)
+# ---------------------------------------------------------------------------
+# Metadata stripping
+# ---------------------------------------------------------------------------
+
 _METADATA_PATTERNS = [
     # [timestamp] Speaker: — full combo (most common leak)
     re.compile(r"^\[.*?\]\s*(?:Insult|insult)\s*:\s*", re.MULTILINE),
@@ -68,6 +123,8 @@ _METADATA_PATTERNS = [
     re.compile(r"^(?:Insult|insult)\s*:\s*", re.MULTILINE),
     # [SEND] that leaked into visible text
     re.compile(r"\[SEND\]", re.IGNORECASE),
+    # NOTE: [REACT:] is NOT stripped here — chat.py parses it first, then strips.
+    # If we stripped it here (in llm.py pipeline), reactions would be lost.
 ]
 
 
@@ -76,6 +133,11 @@ def strip_metadata(text: str) -> str:
     for pattern in _METADATA_PATTERNS:
         text = pattern.sub("", text)
     return text.strip()
+
+
+# ---------------------------------------------------------------------------
+# Time context
+# ---------------------------------------------------------------------------
 
 
 def _get_current_time_context() -> str:
@@ -112,14 +174,32 @@ def _get_current_time_context() -> str:
     return f"{day_name} {now.day} de {month_name} {now.year}, {now.strftime('%H:%M')} ({period})"
 
 
-def build_adaptive_prompt(base_prompt: str, profile, context_len: int) -> str:
-    """Compose system prompt: base persona + user style adaptation + identity reinforcement.
+# ---------------------------------------------------------------------------
+# Prompt building (layered architecture)
+# ---------------------------------------------------------------------------
 
-    The base persona is NEVER modified — adaptation is appended as soft guidance.
+
+def build_adaptive_prompt(
+    base_prompt: str,
+    profile,
+    context_len: int,
+    *,
+    current_message: str = "",
+    recent_messages: list[dict] | None = None,
+    user_facts: list[dict] | None = None,
+) -> tuple[str, PresetSelection]:
+    """Compose system prompt using layered architecture:
+
+    Layer 0-2: base_prompt (persona.md — identity, rules, anti-patterns)
+    Layer 3: Preset behavioral guidance (dynamic, based on conversation)
+    Layer 4: Memory/style injection (per-user)
+    + Time context and metadata rules
+
+    Returns (prompt, preset_selection) so the caller can log the preset.
     """
     prompt = base_prompt
 
-    # Time awareness — always inject current time
+    # --- Time awareness (always inject) ---
     time_ctx = _get_current_time_context()
     prompt += (
         f"\n\n## Current Time\nRight now it is: {time_ctx}. Use this naturally — don't announce it unless relevant."
@@ -129,7 +209,20 @@ def build_adaptive_prompt(base_prompt: str, profile, context_len: int) -> str:
         "Just respond as pure text — no prefixes, no metadata, no formatting artifacts."
     )
 
-    # Style adaptation — only if we have enough data
+    # --- Layer 3: Preset behavioral guidance ---
+    preset = classify_preset(current_message, recent_messages, user_facts)
+    preset_prompt = build_preset_prompt(preset)
+    prompt += f"\n\n{preset_prompt}"
+
+    log.info(
+        "preset_classified",
+        mode=preset.mode.value,
+        modifiers=[m.value for m in preset.modifiers],
+        confidence=round(preset.confidence, 2),
+        reason=preset.reason,
+    )
+
+    # --- Layer 4: Style adaptation (per-user) ---
     if profile and profile.is_confident:
         adaptations = []
 
@@ -175,8 +268,8 @@ def build_adaptive_prompt(base_prompt: str, profile, context_len: int) -> str:
             prompt += "\n\n## User Adaptation (adjust your style, NOT your identity)\n"
             prompt += "\n".join(f"- {a}" for a in adaptations)
 
-    # Identity reinforcement for long conversations
+    # --- Identity reinforcement for long conversations ---
     if context_len >= IDENTITY_REINFORCE_THRESHOLD:
         prompt += IDENTITY_REINFORCEMENT_SUFFIX
 
-    return prompt
+    return prompt, preset

@@ -1,11 +1,13 @@
-"""Tests for insult.core.character — break detection, sanitization, adaptive prompt."""
+"""Tests for insult.core.character — break detection, sanitization, adaptive prompt, anti-patterns."""
 
 from insult.core.character import (
     IDENTITY_REINFORCE_THRESHOLD,
     build_adaptive_prompt,
+    detect_anti_patterns,
     detect_break,
     sanitize,
 )
+from insult.core.presets import PresetMode
 from insult.core.style import UserStyleProfile
 
 # --- Character Break Detection ---
@@ -77,75 +79,123 @@ class TestSanitize:
         assert "Adios" in result
 
 
+# --- Anti-Pattern Detection ---
+
+
+class TestDetectAntiPatterns:
+    def test_clean_response(self):
+        assert detect_anti_patterns("Que pendejo, eso no funciona asi.") == []
+
+    def test_detects_customer_support(self):
+        assert len(detect_anti_patterns("How can I help you today?")) > 0
+
+    def test_detects_therapy_speak(self):
+        assert len(detect_anti_patterns("I understand how you feel about this.")) > 0
+
+    def test_detects_summarizing(self):
+        assert len(detect_anti_patterns("En resumen, la respuesta es no.")) > 0
+
+    def test_detects_stage_directions(self):
+        assert len(detect_anti_patterns("*leans back and sighs*")) > 0
+
+    def test_no_false_positive_on_insult_style(self):
+        assert detect_anti_patterns("Y eso lo dices porque lo pensaste o porque lo leiste?") == []
+
+
 # --- Build Adaptive Prompt ---
 
 
 class TestBuildAdaptivePrompt:
     BASE_PROMPT = "You are Insult."
 
-    def test_no_profile_has_base_and_time(self):
+    def test_returns_tuple(self):
         result = build_adaptive_prompt(self.BASE_PROMPT, None, 5)
-        assert result.startswith(self.BASE_PROMPT)
-        assert "Current Time" in result
-        assert "User Adaptation" not in result
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+
+    def test_no_profile_has_base_and_time(self):
+        prompt, _preset = build_adaptive_prompt(self.BASE_PROMPT, None, 5)
+        assert prompt.startswith(self.BASE_PROMPT)
+        assert "Current Time" in prompt
+        assert "User Adaptation" not in prompt
 
     def test_not_confident_has_base_and_time_only(self):
         profile = UserStyleProfile(message_count=3)
-        result = build_adaptive_prompt(self.BASE_PROMPT, profile, 5)
-        assert result.startswith(self.BASE_PROMPT)
-        assert "Current Time" in result
-        assert "User Adaptation" not in result
+        prompt, _preset = build_adaptive_prompt(self.BASE_PROMPT, profile, 5)
+        assert prompt.startswith(self.BASE_PROMPT)
+        assert "Current Time" in prompt
+        assert "User Adaptation" not in prompt
 
     def test_confident_english_user(self):
         profile = UserStyleProfile(detected_language="en", message_count=10)
-        result = build_adaptive_prompt(self.BASE_PROMPT, profile, 5)
-        assert "English" in result
+        prompt, _preset = build_adaptive_prompt(self.BASE_PROMPT, profile, 5)
+        assert "English" in prompt
 
     def test_confident_brief_user(self):
         profile = UserStyleProfile(avg_word_count=5.0, message_count=10)
-        result = build_adaptive_prompt(self.BASE_PROMPT, profile, 5)
-        assert "brief" in result or "short" in result
+        prompt, _preset = build_adaptive_prompt(self.BASE_PROMPT, profile, 5)
+        assert "brief" in prompt or "short" in prompt
 
     def test_confident_verbose_user(self):
         profile = UserStyleProfile(avg_word_count=60.0, message_count=10)
-        result = build_adaptive_prompt(self.BASE_PROMPT, profile, 5)
-        assert "detailed" in result or "long" in result
+        prompt, _preset = build_adaptive_prompt(self.BASE_PROMPT, profile, 5)
+        assert "detailed" in prompt or "long" in prompt
 
     def test_casual_user(self):
         profile = UserStyleProfile(formality=0.1, message_count=10)
-        result = build_adaptive_prompt(self.BASE_PROMPT, profile, 5)
-        assert "vulgar" in result or "casual" in result
+        prompt, _preset = build_adaptive_prompt(self.BASE_PROMPT, profile, 5)
+        assert "vulgar" in prompt or "casual" in prompt
 
     def test_formal_user(self):
         profile = UserStyleProfile(formality=0.8, message_count=10)
-        result = build_adaptive_prompt(self.BASE_PROMPT, profile, 5)
-        assert "formal" in result
+        prompt, _preset = build_adaptive_prompt(self.BASE_PROMPT, profile, 5)
+        assert "formal" in prompt
 
     def test_technical_user(self):
         profile = UserStyleProfile(technical_level=0.9, message_count=10)
-        result = build_adaptive_prompt(self.BASE_PROMPT, profile, 5)
-        assert "technical" in result.lower()
+        prompt, _preset = build_adaptive_prompt(self.BASE_PROMPT, profile, 5)
+        assert "technical" in prompt.lower()
 
     def test_non_technical_user(self):
         profile = UserStyleProfile(technical_level=0.1, message_count=10)
-        result = build_adaptive_prompt(self.BASE_PROMPT, profile, 5)
-        assert "analogies" in result or "simple" in result
+        prompt, _preset = build_adaptive_prompt(self.BASE_PROMPT, profile, 5)
+        assert "analogies" in prompt or "simple" in prompt
 
     def test_emoji_user(self):
         profile = UserStyleProfile(emoji_ratio=0.1, message_count=10)
-        result = build_adaptive_prompt(self.BASE_PROMPT, profile, 5)
-        assert "emoji" in result.lower()
+        prompt, _preset = build_adaptive_prompt(self.BASE_PROMPT, profile, 5)
+        assert "emoji" in prompt.lower()
 
     def test_identity_reinforcement_on_long_context(self):
-        result = build_adaptive_prompt(self.BASE_PROMPT, None, IDENTITY_REINFORCE_THRESHOLD + 1)
-        assert "REINFORCEMENT" in result
-        assert "You are Insult" in result
+        prompt, _preset = build_adaptive_prompt(self.BASE_PROMPT, None, IDENTITY_REINFORCE_THRESHOLD + 1)
+        assert "REINFORCEMENT" in prompt
+        assert "You are Insult" in prompt
 
     def test_no_reinforcement_on_short_context(self):
-        result = build_adaptive_prompt(self.BASE_PROMPT, None, 3)
-        assert "REINFORCEMENT" not in result
+        prompt, _preset = build_adaptive_prompt(self.BASE_PROMPT, None, 3)
+        assert "REINFORCEMENT" not in prompt
 
     def test_base_prompt_never_modified(self):
         profile = UserStyleProfile(formality=0.1, detected_language="en", message_count=10)
-        result = build_adaptive_prompt(self.BASE_PROMPT, profile, 15)
-        assert result.startswith(self.BASE_PROMPT)
+        prompt, _preset = build_adaptive_prompt(self.BASE_PROMPT, profile, 15)
+        assert prompt.startswith(self.BASE_PROMPT)
+
+    def test_injects_preset_guidance(self):
+        prompt, preset = build_adaptive_prompt(self.BASE_PROMPT, None, 5, current_message="hola que tal")
+        assert "Current Mode" in prompt
+        assert preset.mode == PresetMode.DEFAULT_ABRASIVE
+
+    def test_serious_preset_on_crisis_message(self):
+        prompt, preset = build_adaptive_prompt(self.BASE_PROMPT, None, 5, current_message="me quiero morir")
+        assert preset.mode == PresetMode.RESPECTFUL_SERIOUS
+        assert "Respectful Serious" in prompt  # both prompt and preset used
+
+    def test_meta_deflection_on_identity_probe(self):
+        _prompt, preset = build_adaptive_prompt(self.BASE_PROMPT, None, 5, current_message="eres un AI?")
+        assert preset.mode == PresetMode.META_DEFLECTION
+
+    def test_intellectual_pressure_on_code(self):
+        _prompt, preset = build_adaptive_prompt(
+            self.BASE_PROMPT, None, 5, current_message="mi codigo tiene un bug, que opinas de esta arquitectura?"
+        )
+        assert preset.mode == PresetMode.INTELLECTUAL_PRESSURE

@@ -6,7 +6,7 @@ import anthropic
 import structlog
 from anthropic.types import MessageParam
 
-from insult.core.character import CHARACTER_REINFORCEMENT, detect_break, sanitize, strip_metadata
+from insult.core.character import CHARACTER_REINFORCEMENT, detect_anti_patterns, detect_break, sanitize, strip_metadata
 
 log = structlog.get_logger()
 
@@ -98,5 +98,10 @@ class LLMClient:
             except Exception:
                 log.warning("character_break_retry_failed_using_sanitized_original")
                 return sanitize(response)
+
+        # Log anti-pattern drift (soft violations — doesn't block, just monitors)
+        anti_patterns = detect_anti_patterns(response)
+        if anti_patterns:
+            log.warning("anti_pattern_detected", patterns=anti_patterns)
 
         return response

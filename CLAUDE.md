@@ -19,12 +19,12 @@ ruff check . && ruff format .     # Lint + format (run before every commit)
 ruff check --fix .                # Auto-fix lint issues
 
 # Full CI locally
-ruff check . && ruff format --check . && pytest -v --cov --cov-fail-under=75 && bandit -r insult/ -c pyproject.toml && pip-audit
+ruff check . && ruff format --check . && pytest -v --cov --cov-fail-under=80 && bandit -r insult/ -c pyproject.toml && pip-audit
 ```
 
 ## Architecture
 
-**Request flow**: User message → `ChatCog.on_message` (cogs/chat.py) → memory store + profile update → context build (recent 50 + 5 keyword-relevant) → `build_adaptive_prompt` (core/character.py) layers system prompt → `LLMClient.chat` (core/llm.py) with break detection retry → response chunked to Discord (1990 char limit).
+**Request flow**: User message → `ChatCog.on_message` (cogs/chat.py) → memory store + profile update → context build (recent 50 + 5 keyword-relevant) → preset classification (core/presets.py) → `build_adaptive_prompt` (core/character.py) layers system prompt → `LLMClient.chat` (core/llm.py) with break detection + anti-pattern monitoring → parse reactions `[REACT:]` → response chunked to Discord (1990 char limit) → background: emoji reactions + fact extraction.
 
 **DI container**: `app.py` creates a `Container` dataclass holding Settings, MemoryStore, LLMClient, and Bot. Cogs receive the container via constructor. All tests mock this container (see `tests/conftest.py` for fixtures).
 
@@ -32,10 +32,23 @@ ruff check . && ruff format --check . && pytest -v --cov --cov-fail-under=75 && 
 
 **Chat flow (no prefix)**: The bot responds to ALL messages in channels (via `on_message` listener), not just `!chat`. Messages starting with `!` are ignored by the listener (handled as commands). Per-user cooldown is 15s.
 
-**System prompt composition** (core/character.py `build_adaptive_prompt`):
+**System prompt composition** (core/character.py `build_adaptive_prompt`, returns `tuple[str, PresetSelection]`):
 1. Base persona from `persona.md` (loaded at startup into settings.system_prompt)
-2. Style adaptation hints appended per-user (if profile has 5+ messages)
-3. Identity reinforcement suffix for conversations >10 messages
+2. Time awareness context (Mexico City timezone)
+3. Metadata rules (don't reproduce timestamps, speaker labels)
+4. Preset behavioral guidance — one of 6 modes dynamically selected by `classify_preset()` (core/presets.py)
+5. Style adaptation hints appended per-user (if profile has 5+ messages)
+6. Identity reinforcement suffix for conversations >10 messages
+7. User facts appended (from facts.py)
+
+**Preset system** (core/presets.py): Rule-based classifier (zero LLM cost) that analyzes current message + last 5 messages to select a behavioral mode. 6 modes: DEFAULT_ABRASIVE, PLAYFUL_ROAST, INTELLECTUAL_PRESSURE, RELATIONAL_PROBE, RESPECTFUL_SERIOUS, META_DEFLECTION. 2 modifiers: MEMORY_RECALL, CONTEMPT. Only the selected preset's guidance is injected into the system prompt.
+
+**Reactions** (cogs/chat.py): LLM can include `[REACT:emoji1,emoji2]` in response. Parsed before text processing, executed async in background with human-like delay (0.5-2s). Max 3 reactions. Reaction-only responses (no text) are supported.
+
+**Post-generation pipeline** (core/llm.py + core/character.py):
+1. `strip_metadata()` — remove leaked timestamps, speaker labels, `[SEND]` markers
+2. `detect_break()` — 20 regex patterns for character identity leaks → retry with reinforced prompt → sanitize as fallback
+3. `detect_anti_patterns()` — 16 patterns for assistant drift (customer-support, therapy-speak, summarizing) → log warning, don't block
 
 **Memory** (core/memory.py): Append-only SQLite via aiosqlite. Context is built per-channel (all users see same conversation), but style profiles are per-user. `_ensure_connection()` auto-reconnects before every DB operation.
 
@@ -48,7 +61,7 @@ Tests use a fully mocked DI container (`conftest.py`). To test a cog:
 2. Call the method directly (e.g., `cog._respond(mock_message, "text")`)
 3. Assert on `mock_llm.chat`, `mock_memory.store`, `message.channel.send`
 
-Coverage threshold is 75% (`pyproject.toml`). Pure I/O modules (bot.py, app.py, config.py, llm.py, memory.py) are excluded from coverage.
+Coverage threshold is 80% in CI (`workflow.md`), 75% in `pyproject.toml` (local floor). Pure I/O modules (bot.py, app.py, config.py, llm.py, memory.py) are excluded from coverage.
 
 ## Rules
 Detailed rules in `.claude/rules/`: architecture, robustness, testing, workflow, persona. Key non-obvious rules:
@@ -56,3 +69,5 @@ Detailed rules in `.claude/rules/`: architecture, robustness, testing, workflow,
 - Error messages to users must be in-character (via `core/errors.py`)
 - All logging via structlog, never print()
 - DB write failures are logged but don't crash commands
+- Preset classification logged every message for drift monitoring
+- Anti-pattern drift is logged but doesn't block responses

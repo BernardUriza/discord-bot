@@ -92,6 +92,7 @@ def mock_ctx():
     msg.channel.typing.return_value.__aenter__ = AsyncMock()
     msg.channel.typing.return_value.__aexit__ = AsyncMock(return_value=False)
     msg.attachments = []
+    msg.add_reaction = AsyncMock()
     ctx.message = msg
 
     # Also set up ctx.typing for backwards compat

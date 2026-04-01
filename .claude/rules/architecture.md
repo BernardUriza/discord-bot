@@ -4,14 +4,17 @@
 - `insult/config.py` — Pydantic Settings singleton, all config via .env
 - `insult/app.py` — DI container (Container dataclass), wires all deps
 - `insult/bot.py` — Discord lifecycle, events, signal handling, health check
-- `insult/cogs/chat.py` — !chat command with style adaptation + attachments
+- `insult/cogs/chat.py` — on_message listener + !chat command, reactions, response chunking
 - `insult/cogs/utility.py` — !ping, !memoria, !buscar, !perfil commands
-- `insult/core/llm.py` — Claude API client (async) + character break retry
-- `insult/core/memory.py` — Longitudinal memory (SQLite, append-only) + user profiles
-- `insult/core/character.py` — Break detection, sanitization, adaptive prompt building
+- `insult/core/llm.py` — Claude API client (async) + character break retry + anti-pattern monitoring
+- `insult/core/memory.py` — Longitudinal memory (SQLite, append-only) + user profiles + user facts
+- `insult/core/character.py` — Break detection, anti-pattern detection, sanitization, adaptive prompt building with preset integration
+- `insult/core/presets.py` — Behavioral preset system: 6 modes + 2 modifiers, rule-based classifier, prompt guidance
 - `insult/core/errors.py` — In-character error responses, error classification
 - `insult/core/style.py` — User style profiling (EMA, language, formality, tech level)
 - `insult/core/attachments.py` — Discord attachment processing (images, text, PDFs)
+- `insult/core/facts.py` — LLM-based fact extraction from conversations, prompt building
+- `insult/core/proactive.py` — Proactive messaging (periodic check-ins based on time/activity)
 - `persona.md` — System prompt for the Insult persona (root of project)
 - `tests/` — pytest suite (unit + cog tests with mocked DI container)
 - `pyproject.toml` — ruff config, pytest config, coverage config, bandit config
@@ -26,7 +29,26 @@
 - All DB operations go through _ensure_connection() for auto-reconnect
 - Commands must have @commands.cooldown to prevent token burn
 - Character break detection → auto-retry → sanitize as fallback
+- Anti-pattern detection → log warning (doesn't block, monitors drift)
 - User style adaptation via EMA (exponential moving average) with confidence gate (5 msgs)
+- Preset classification via rule-based regex patterns (zero LLM cost, runs every message)
+- `build_adaptive_prompt` returns `tuple[str, PresetSelection]` — caller logs the selected preset
+- Emoji reactions parsed from `[REACT:]` markers in LLM response, executed async in background
+- Background tasks (reactions, fact extraction) use `asyncio.create_task` + `_background_tasks` set for lifecycle management
+
+## Preset System
+- 6 behavioral modes: DEFAULT_ABRASIVE (~55%), PLAYFUL_ROAST (~15%), INTELLECTUAL_PRESSURE (~12%), RELATIONAL_PROBE (~8%), RESPECTFUL_SERIOUS (~3%), META_DEFLECTION (~7%)
+- 2 modifiers (overlay on any mode): MEMORY_RECALL, CONTEMPT
+- Priority: RESPECTFUL_SERIOUS > META_DEFLECTION > RELATIONAL_PROBE > INTELLECTUAL_PRESSURE > PLAYFUL_ROAST > DEFAULT_ABRASIVE
+- Only the selected preset's guidance is injected into the system prompt (not all 6)
+- Classifier analyzes: current message (primary) + last 5 messages (secondary) + user facts (for MEMORY_RECALL)
+
+## Reactions
+- LLM includes `[REACT:emoji1,emoji2]` in response (max 3 emojis)
+- `parse_reactions()` extracts emojis, `strip_reactions()` removes markers from text
+- Reactions fire in background with human-like delay (0.5-2s initial, 0.35s between)
+- Reaction-only responses (no text) are supported — powerful for dismissal/acknowledgment
+- `[REACT:]` is NOT in `strip_metadata` — chat.py owns the full parse→strip lifecycle
 
 ## Attachments
 - Images (png/jpg/gif/webp): sent to Claude as base64 vision blocks
@@ -55,4 +77,5 @@
 - Max message length enforced before sending to LLM (4000 chars)
 - Max attachment size enforced (5MB)
 - Character breaks auto-detected and sanitized (never expose model identity)
+- Anti-pattern drift monitored via logging (never expose assistant behavior)
 - In-character errors never expose "Claude", "Anthropic", or API internals
