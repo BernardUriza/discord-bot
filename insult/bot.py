@@ -8,6 +8,7 @@ from discord.ext import commands, tasks
 
 from insult.app import Container, create_app
 from insult.cogs import ChatCog, UtilityCog
+from insult.cogs.voice import VoiceCog
 from insult.core.backup import download_db, is_azure_configured, upload_db
 from insult.core.character import _get_current_time_context, strip_metadata
 from insult.core.errors import get_error_response
@@ -145,6 +146,7 @@ def _build(container: Container):
             _bind_signals()
             await bot.add_cog(ChatCog(container))
             await bot.add_cog(UtilityCog(container))
+            await bot.add_cog(VoiceCog(container))
             _health_check.start()
             _proactive_task.start()
             if is_azure_configured():

@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     memory_recent_limit: int = 50
     memory_relevant_limit: int = 5
 
+    # Azure OpenAI TTS (voice playback)
+    azure_openai_endpoint: str = ""
+    azure_openai_key: SecretStr = SecretStr("")
+    azure_openai_tts_deployment: str = "tts"
+    tts_voice: str = "onyx"  # alloy, echo, fable, onyx, nova, shimmer
+
     # Paths
     storage_dir: Path = _PROJECT_ROOT / "storage"
     db_path: Path = _PROJECT_ROOT / "storage" / "memory.db"

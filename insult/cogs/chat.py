@@ -32,7 +32,7 @@ MESSAGE_DELIMITER = "[SEND]"
 TYPING_CHARS_PER_SECOND = 50  # ~250 CPM, fast mobile typing speed
 MIN_TYPING_DELAY = 0.8
 MAX_TYPING_DELAY = 5.0
-VERSION_TAG = "ᵇᵉᵗᵃ ᵛ⁰·⁷·⁴"  # superscript unicode — visible but unobtrusive
+VERSION_TAG = "ᵇᵉᵗᵃ ᵛ⁰·⁸·⁰"  # superscript unicode — visible but unobtrusive
 
 # Reaction system — [REACT:💀,🔥] parsed from LLM response
 REACTION_PATTERN = re.compile(r"\[REACT:([^\]]*)\]", re.IGNORECASE)
