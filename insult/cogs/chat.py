@@ -13,6 +13,7 @@ import discord
 import structlog
 from discord.ext import commands
 
+from insult.core.actions import execute_create_channel, parse_actions, strip_actions
 from insult.core.attachments import process_attachments
 from insult.core.character import build_adaptive_prompt
 from insult.core.errors import classify_error, get_error_response
@@ -30,7 +31,7 @@ MESSAGE_DELIMITER = "[SEND]"
 TYPING_CHARS_PER_SECOND = 50  # ~250 CPM, fast mobile typing speed
 MIN_TYPING_DELAY = 0.8
 MAX_TYPING_DELAY = 5.0
-VERSION_TAG = "ᵇᵉᵗᵃ ᵛ⁰·⁵·¹"  # superscript unicode — visible but unobtrusive
+VERSION_TAG = "ᵇᵉᵗᵃ ᵛ⁰·⁶·⁰"  # superscript unicode — visible but unobtrusive
 
 # Reaction system — [REACT:💀,🔥] parsed from LLM response
 REACTION_PATTERN = re.compile(r"\[REACT:([^\]]*)\]", re.IGNORECASE)
@@ -236,9 +237,11 @@ class ChatCog(commands.Cog):
             await message.channel.send(get_error_response(classify_error(e)))
             return
 
-        # Extract emoji reactions before any text processing
+        # Extract emoji reactions and actions before any text processing
         reactions = parse_reactions(response)
         response = strip_reactions(response)
+        actions = parse_actions(response)
+        response = strip_actions(response)
 
         # Store the full response (without delimiters) in memory
         clean_response = response.replace(MESSAGE_DELIMITER, "\n")
@@ -252,6 +255,12 @@ class ChatCog(commands.Cog):
         # Fire emoji reactions in background (on the USER's message, with human-like delay)
         if reactions:
             task = asyncio.create_task(self._add_reactions(message, reactions))
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
+
+        # Execute server actions in background (channel creation, etc.)
+        if actions and message.guild:
+            task = asyncio.create_task(self._execute_actions(message, actions))
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
 
@@ -278,6 +287,21 @@ class ChatCog(commands.Cog):
         task = asyncio.create_task(self._extract_user_facts(user_id, user_name, user_facts, recent))
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
+
+    async def _execute_actions(self, message: discord.Message, actions: list):
+        """Background task: execute server actions (channel creation, etc.)."""
+        for action in actions:
+            if action.action_type == "create_channel" and message.guild:
+                try:
+                    channel = await execute_create_channel(message.guild, action, message.author)
+                    if channel:
+                        await message.channel.send(f"Listo, ahí está: {channel.mention}")
+                    else:
+                        log.warning("action_channel_creation_returned_none", action=action)
+                except Exception:
+                    log.exception("action_execution_failed", action_type=action.action_type)
+            else:
+                log.warning("action_unknown_type", action_type=action.action_type)
 
     async def _add_reactions(self, message: discord.Message, emojis: list[str]):
         """Background task: add emoji reactions to the user's message with human-like delay."""

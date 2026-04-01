@@ -123,8 +123,9 @@ _METADATA_PATTERNS = [
     re.compile(r"^(?:Insult|insult)\s*:\s*", re.MULTILINE),
     # [SEND] that leaked into visible text
     re.compile(r"\[SEND\]", re.IGNORECASE),
-    # NOTE: [REACT:] is NOT stripped here — chat.py parses it first, then strips.
-    # If we stripped it here (in llm.py pipeline), reactions would be lost.
+    # NOTE: [REACT:] and [ACTION:] are NOT stripped here — chat.py parses them first.
+    # This is a safety net only for markers that somehow survive chat.py processing.
+    re.compile(r"\[ACTION:[^\]]*\]", re.IGNORECASE),
 ]
 
 
