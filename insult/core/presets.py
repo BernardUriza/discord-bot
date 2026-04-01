@@ -10,14 +10,14 @@ system prompt so the LLM naturally adopts the right energy.
 
 import re
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 # ---------------------------------------------------------------------------
 # Preset definitions
 # ---------------------------------------------------------------------------
 
 
-class PresetMode(str, Enum):
+class PresetMode(StrEnum):
     DEFAULT_ABRASIVE = "default_abrasive"
     PLAYFUL_ROAST = "playful_roast"
     INTELLECTUAL_PRESSURE = "intellectual_pressure"
@@ -26,7 +26,7 @@ class PresetMode(str, Enum):
     META_DEFLECTION = "meta_deflection"
 
 
-class PresetModifier(str, Enum):
+class PresetModifier(StrEnum):
     MEMORY_RECALL = "memory_recall"
     CONTEMPT = "contempt"
 
