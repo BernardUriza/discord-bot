@@ -1,7 +1,7 @@
-"""Voice cog — TTS playback via Azure OpenAI.
+"""Voice cog — TTS via Azure OpenAI, sent as audio file attachment.
 
-React with 🔊 on any message to have the bot join your voice channel
-and read the message aloud using Azure OpenAI TTS.
+React with 🔊 on any message to have the bot generate a voice clip
+and send it as an MP3 file in the channel.
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 SPEAK_EMOJI = "🔊"
-VOICE_DISCONNECT_AFTER = 30.0  # seconds idle before auto-disconnect
 
 
 class VoiceCog(commands.Cog):
@@ -46,7 +45,7 @@ class VoiceCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
-        """When someone reacts with 🔊, TTS the message in their voice channel."""
+        """When someone reacts with 🔊, generate TTS and send as audio file."""
         if str(payload.emoji) != SPEAK_EMOJI:
             return
         if payload.user_id == self.bot.user.id:
@@ -69,59 +68,28 @@ class VoiceCog(commands.Cog):
         if not text:
             return
 
-        # Find the user's voice channel
-        member = guild.get_member(payload.user_id)
-        if not member or not member.voice or not member.voice.channel:
-            await channel.send("Metete a un canal de voz primero, genio.")
-            return
-
-        voice_channel = member.voice.channel
-
         client = self._get_tts_client()
         if not client:
             log.warning("tts_not_configured")
-            await channel.send("No tengo voz configurada. Dile al admin.")
             return
 
         # Generate TTS audio
         try:
-            tts_response = await client.audio.speech.create(
-                model=self.settings.azure_openai_tts_deployment,
-                voice=self.settings.tts_voice,
-                input=text[:4096],  # Azure TTS limit
-            )
-            audio_bytes = tts_response.content
-            log.info("tts_generated", text_len=len(text), audio_bytes=len(audio_bytes))
+            async with channel.typing():
+                tts_response = await client.audio.speech.create(
+                    model=self.settings.azure_openai_tts_deployment,
+                    voice=self.settings.tts_voice,
+                    input=text[:4096],
+                    response_format="mp3",
+                )
+                audio_bytes = tts_response.content
+                log.info("tts_generated", text_len=len(text), audio_bytes=len(audio_bytes))
         except Exception:
             log.exception("tts_generation_failed")
             await channel.send("Se me trabo la voz. Intentale otra vez.")
             return
 
-        # Connect to voice channel and play
-        try:
-            vc = guild.voice_client
-            if vc and vc.is_connected():
-                if vc.channel != voice_channel:
-                    await vc.move_to(voice_channel)
-            else:
-                vc = await voice_channel.connect()
-
-            audio_source = discord.FFmpegPCMAudio(io.BytesIO(audio_bytes), pipe=True)
-
-            if vc.is_playing():
-                vc.stop()
-
-            vc.play(
-                audio_source,
-                after=lambda e: (
-                    log.info("tts_playback_done") if not e else log.error("tts_playback_error", error=str(e))
-                ),
-            )
-            log.info("tts_playing", channel=voice_channel.name, text_len=len(text))
-
-        except discord.ClientException as e:
-            log.error("voice_connection_failed", error=str(e))
-            await channel.send("No me puedo conectar al canal de voz.")
-        except Exception:
-            log.exception("voice_playback_failed")
-            await channel.send("Algo salio mal con la voz. Intentale de nuevo.")
+        # Send as audio file attachment
+        audio_file = discord.File(io.BytesIO(audio_bytes), filename="insult.mp3")
+        await channel.send(file=audio_file)
+        log.info("tts_sent", text_len=len(text), channel=channel.name)

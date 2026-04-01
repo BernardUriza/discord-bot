@@ -10,8 +10,7 @@ typer>=0.9.0
 # Azure (optional — for DB persistence)
 azure-storage-blob>=12.19.0
 
-# Voice (TTS via Azure OpenAI + Discord voice playback)
-PyNaCl>=1.5.0
+# Voice (TTS via Azure OpenAI — sent as MP3 attachment)
 openai>=1.30.0
 
 # Testing
