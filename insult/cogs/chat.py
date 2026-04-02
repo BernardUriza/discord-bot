@@ -319,8 +319,9 @@ class ChatCog(commands.Cog):
             if other_calls and message.guild:
                 self._spawn_task(self._execute_tool_calls(message, other_calls))
 
-        # Fallback: if LLM produced no text AND no reactions, send in-character error
-        if not response.strip() and not reactions:
+        # Fallback: if LLM produced no text AND no reactions AND no tool calls, send in-character error
+        # (tool calls run in background — empty text is expected when LLM only produced tool_use)
+        if not response.strip() and not reactions and not llm_response.tool_calls:
             response = get_error_response("generic")
 
         # Send text response with [SEND] splitting, chunking, and typing delays
