@@ -300,9 +300,7 @@ class ChatCog(commands.Cog):
         if reactions:
             self._spawn_task(add_reactions(message, reactions))
 
-        # Execute media generation BEFORE text (visual/sonic punctuation leads, text follows)
-        # Other tool calls (channels) run in background as before
-        media_sent = False
+        # Execute tool calls — media runs in background (never blocks text delivery)
         if llm_response.tool_calls:
             media_names = {"generate_image", "play_audio"}
             reminder_names = {"create_reminder", "list_reminders", "cancel_reminder"}
@@ -313,18 +311,16 @@ class ChatCog(commands.Cog):
             ]
             for mc in media_calls[:1]:  # Max 1 media per response
                 if mc.name == "generate_image":
-                    media_sent = await self._execute_image_call(message, mc)
+                    self._spawn_task(self._execute_image_call(message, mc))
                 elif mc.name == "play_audio":
-                    media_sent = await self._execute_audio_call(message, mc)
-            # Execute reminder tools (synchronous — result may affect response)
+                    self._spawn_task(self._execute_audio_call(message, mc))
             for rc in reminder_calls:
                 self._spawn_task(self._execute_reminder_call(message, rc))
             if other_calls and message.guild:
                 self._spawn_task(self._execute_tool_calls(message, other_calls))
 
-        # Fallback: if LLM produced no text AND media failed AND no reactions, send in-character error
-        # (reaction-only responses are valid — emoji on user's message with no text)
-        if not response.strip() and not media_sent and not reactions:
+        # Fallback: if LLM produced no text AND no reactions, send in-character error
+        if not response.strip() and not reactions:
             response = get_error_response("generic")
 
         # Send text response with [SEND] splitting, chunking, and typing delays

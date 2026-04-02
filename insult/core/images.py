@@ -21,7 +21,7 @@ POLLINATIONS_BASE = "https://image.pollinations.ai/prompt"
 DEFAULT_MODEL = "flux"
 DEFAULT_WIDTH = 1024
 DEFAULT_HEIGHT = 1024
-REQUEST_TIMEOUT = 60  # Pollinations can be slow (5-15s for Flux)
+REQUEST_TIMEOUT = 30  # Pollinations typically 5-15s; don't block longer
 MAX_PROMPT_LENGTH = 500
 IMAGE_COOLDOWN_SECONDS = 20  # Min seconds between image generations (rate limit protection)
 
