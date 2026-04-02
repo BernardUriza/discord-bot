@@ -394,7 +394,7 @@ class ChatCog(commands.Cog):
         task.add_done_callback(self._background_tasks.discard)
 
     async def _execute_image_call(self, message: discord.Message, tool_call) -> bool:
-        """Send a Pollinations-generated image BEFORE the text response. Returns True if sent."""
+        """Send a Pollinations-generated image as background task. Returns True if sent."""
         from insult.core.images import generate_image
 
         prompt = tool_call.input.get("prompt", "")
@@ -414,9 +414,11 @@ class ChatCog(commands.Cog):
                 await message.channel.send(file=discord.File(image_data, "insult.png"))
                 return True
             log.warning("image_generation_returned_none", prompt=prompt[:80])
+            await message.channel.send("No pude generar la imagen. Ni modo.")
             return False
         except Exception:
             log.exception("image_generation_failed", prompt=prompt[:80])
+            await message.channel.send("Se trabó la generación de imagen. Luego le intento.")
             return False
 
     async def _execute_audio_call(self, message: discord.Message, tool_call) -> bool:
