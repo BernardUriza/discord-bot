@@ -335,7 +335,13 @@ class ChatCog(commands.Cog):
         height = tool_call.input.get("height", 1024)
 
         try:
-            image_data = await generate_image(prompt, model=model, width=width, height=height)
+            image_data = await generate_image(
+                prompt,
+                model=model,
+                width=width,
+                height=height,
+                api_key=self.settings.pollinations_api_key,
+            )
             if image_data:
                 await message.channel.send(file=discord.File(image_data, "insult.png"))
                 return True

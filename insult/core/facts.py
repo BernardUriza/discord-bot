@@ -79,7 +79,7 @@ async def extract_facts(
     try:
         response = await client.messages.create(
             model=model,
-            max_tokens=512,
+            max_tokens=1024,
             system=EXTRACTION_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
         )
