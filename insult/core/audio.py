@@ -86,6 +86,8 @@ async def search_and_clip_youtube(query: str) -> io.BytesIO | None:
             "--no-playlist",
             "--quiet",
             "--no-warnings",
+            "--js-runtimes",
+            "node",  # Required for YouTube JS challenge solving
             "--output",
             str(raw_path),
         ]

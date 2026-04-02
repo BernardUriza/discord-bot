@@ -2,8 +2,8 @@ FROM python:3.14-slim
 
 WORKDIR /app
 
-# System deps: ffmpeg for audio clip extraction
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+# System deps: ffmpeg for audio clips, nodejs for yt-dlp JS challenge solving
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg nodejs && rm -rf /var/lib/apt/lists/*
 
 # Install Python deps (cached layer)
 COPY requirements.txt .
