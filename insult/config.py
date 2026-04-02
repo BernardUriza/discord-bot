@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     azure_openai_tts_deployment: str = "tts"
     tts_voice: str = "onyx"  # alloy, echo, fable, onyx, nova, shimmer
 
+    # Freesound (optional — for meme sound effects)
+    freesound_api_key: str = ""
+
     # Paths
     storage_dir: Path = _PROJECT_ROOT / "storage"
     db_path: Path = _PROJECT_ROOT / "storage" / "memory.db"

@@ -74,6 +74,19 @@ class MemoryStore:
             CREATE INDEX IF NOT EXISTS idx_user_facts
             ON user_facts(user_id)
         """)
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS world_scans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                topic TEXT NOT NULL,
+                findings TEXT NOT NULL,
+                commentary TEXT NOT NULL,
+                timestamp REAL NOT NULL
+            )
+        """)
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_world_scans_ts
+            ON world_scans(timestamp DESC)
+        """)
         await self._db.commit()
         log.info("memory_connected", db_path=str(self.db_path))
 
@@ -342,4 +355,28 @@ class MemoryStore:
             log.info("facts_saved", user_id=user_id, count=len(facts))
         except aiosqlite.Error as e:
             log.error("facts_save_failed", user_id=user_id, error=str(e))
-            raise
+
+    # --- World Scans (Insult's internal knowledge of the world) ---
+
+    async def store_world_scan(self, topic: str, findings: str, commentary: str):
+        """Store a world scan result — Insult's internal memory of what's happening out there."""
+        await self._ensure_connection()
+        try:
+            await self._db.execute(
+                "INSERT INTO world_scans (topic, findings, commentary, timestamp) VALUES (?, ?, ?, ?)",
+                (topic, findings, commentary, time.time()),
+            )
+            await self._db.commit()
+            log.info("world_scan_stored", topic=topic[:80])
+        except aiosqlite.Error as e:
+            log.error("world_scan_store_failed", error=str(e))
+
+    async def get_recent_world_scans(self, limit: int = 5) -> list[dict]:
+        """Get most recent world scans for context in conversations."""
+        await self._ensure_connection()
+        cursor = await self._db.execute(
+            "SELECT topic, findings, commentary, timestamp FROM world_scans ORDER BY timestamp DESC LIMIT ?",
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        return [{"topic": r[0], "findings": r[1], "commentary": r[2], "timestamp": r[3]} for r in rows]

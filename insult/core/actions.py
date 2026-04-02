@@ -18,7 +18,6 @@ log = structlog.get_logger()
 # Constants
 # ---------------------------------------------------------------------------
 
-MAX_ACTIONS_PER_RESPONSE = 2  # Safety: prevent LLM from creating 50 channels
 VALID_CHANNEL_TYPES = {"private", "topic", "category"}
 CHANNEL_NAME_MAX_LEN = 100
 CHANNEL_LIMIT_BUFFER = 50  # Don't create if guild has >= 500 - buffer channels
@@ -89,6 +88,84 @@ CHANNEL_TOOLS = [
                 },
             },
             "required": [],
+            "additionalProperties": False,
+        },
+    },
+]
+
+AUDIO_TOOLS = [
+    {
+        "name": "play_audio",
+        "description": (
+            "Search for a song or sound effect and send a 15-second audio clip to the channel. "
+            "Use this PROACTIVELY as sonic punctuation — drop music when the moment calls for it. "
+            "You're a futuristic robot that scores its own conversations with music and meme sounds. "
+            "Use for: current trending songs as karaoke-style reactions, meme sound effects, "
+            "dramatic music for dramatic moments, absurd sounds for absurd statements. "
+            "The query should be a YouTube search string or a sound effect description. "
+            "You can play audio AND write text in the same response."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Search query for the audio clip. For music: song name, artist, or lyrics snippet. "
+                        "For memes: 'sad trombone', 'bruh sound effect', 'dramatic chipmunk'. "
+                        "For mood: 'epic orchestral tension', 'lo-fi chill beat', 'mariachi trumpets'."
+                    ),
+                },
+                "source": {
+                    "type": "string",
+                    "enum": ["youtube", "meme"],
+                    "description": "youtube=songs and music (default), meme=sound effects and meme sounds from Freesound",
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
+]
+
+IMAGE_TOOLS = [
+    {
+        "name": "generate_image",
+        "description": (
+            "Generate an AI image using Pollinations and send it to the channel. "
+            "Use this PROACTIVELY as visual punctuation — to illustrate a point, mock something visually, "
+            "react to absurdity with an image, or just because the moment calls for it. "
+            "You don't need to be asked. If a visual would hit harder than text, generate one. "
+            "The prompt should be a VISUAL DESCRIPTION for the image generator, not your text response. "
+            "Think cinematography: lighting, composition, mood, style. "
+            "You can generate an image AND write text in the same response."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": (
+                        "Visual description for image generation. Be specific and cinematic. "
+                        "Good: 'a corporate boardroom where all the chairs are cages, harsh fluorescent lighting, "
+                        "dystopian realism'. Bad: 'capitalism is bad'. Think like a director, not a philosopher."
+                    ),
+                },
+                "model": {
+                    "type": "string",
+                    "enum": ["flux", "turbo"],
+                    "description": "flux=high quality (default, ~10s), turbo=faster but lower quality (~3s)",
+                },
+                "width": {
+                    "type": "integer",
+                    "description": "Image width in pixels. Default 1024. Use 1920 for cinematic, 512 for quick.",
+                },
+                "height": {
+                    "type": "integer",
+                    "description": "Image height in pixels. Default 1024. Use 1080 for cinematic, 512 for quick.",
+                },
+            },
+            "required": ["prompt"],
             "additionalProperties": False,
         },
     },

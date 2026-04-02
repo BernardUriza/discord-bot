@@ -1,6 +1,6 @@
 [project]
 name = "insult"
-version = "1.1.0"
+version = "1.4.0"
 requires-python = ">=3.14"
 
 [tool.ruff]
@@ -50,6 +50,7 @@ omit = [
     "insult/core/backup.py",  # Azure Blob Storage I/O
     "insult/cogs/utility.py",  # Discord commands (requires real bot context)
     "insult/cogs/voice.py",    # Voice TTS (requires real Discord + Azure OpenAI)
+    "insult/core/audio.py",    # YouTube/Freesound I/O (subprocess + HTTP, integration test territory)
 ]
 
 [tool.coverage.report]

@@ -9,6 +9,7 @@ from datetime import datetime
 
 import structlog
 
+from insult.core.flows import FlowAnalysis, build_flow_prompt
 from insult.core.presets import PresetSelection, build_preset_prompt, classify_preset
 
 log = structlog.get_logger()
@@ -195,11 +196,13 @@ def build_adaptive_prompt(
     current_message: str = "",
     recent_messages: list[dict] | None = None,
     user_facts: list[dict] | None = None,
+    flow_analysis: FlowAnalysis | None = None,
 ) -> tuple[str, PresetSelection]:
     """Compose system prompt using layered architecture:
 
     Layer 0-2: base_prompt (persona.md — identity, rules, anti-patterns)
     Layer 3: Preset behavioral guidance (dynamic, based on conversation)
+    Layer 3.5: Flow behavioral guidance (epistemic, pressure, expression, awareness)
     Layer 4: Memory/style injection (per-user)
     + Time context and metadata rules
 
@@ -229,6 +232,12 @@ def build_adaptive_prompt(
         confidence=round(preset.confidence, 2),
         reason=preset.reason,
     )
+
+    # --- Layer 3.5: Flow behavioral guidance ---
+    if flow_analysis:
+        flow_prompt = build_flow_prompt(flow_analysis)
+        if flow_prompt:
+            prompt += f"\n\n{flow_prompt}"
 
     # --- Layer 4: Style adaptation (per-user) ---
     if profile and profile.is_confident:

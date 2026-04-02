@@ -13,7 +13,12 @@ from insult.core.backup import download_db, is_azure_configured, upload_db
 from insult.core.character import _get_current_time_context, strip_metadata
 from insult.core.delivery import MESSAGE_DELIMITER, split_response
 from insult.core.errors import get_error_response
-from insult.core.proactive import generate_proactive_message, should_send_now
+from insult.core.proactive import (
+    generate_proactive_message,
+    generate_world_scan_message,
+    should_send_now,
+    should_world_scan,
+)
 
 log = structlog.get_logger()
 
@@ -99,9 +104,22 @@ def _build(container: Container):
             return
 
         time_str = _get_current_time_context()
-        msg = await generate_proactive_message(
-            container.llm.client, container.settings.llm_model, time_str, user_facts, recent_summary
-        )
+
+        # ~30% of the time: world scan (search the web and comment)
+        # ~70% of the time: social check-in (ask about users)
+        is_world_scan = should_world_scan()
+        log.info("proactive_mode_selected", mode="world_scan" if is_world_scan else "social")
+
+        if is_world_scan:
+            scan_result = await generate_world_scan_message(
+                container.llm.client, container.settings.llm_model, time_str, user_facts
+            )
+            msg = scan_result.commentary if scan_result else None
+        else:
+            scan_result = None
+            msg = await generate_proactive_message(
+                container.llm.client, container.settings.llm_model, time_str, user_facts, recent_summary
+            )
 
         if msg:
             msg = strip_metadata(msg)
@@ -110,7 +128,8 @@ def _build(container: Container):
                 for part in parts:
                     await target_channel.send(part)
                 _last_proactive_ts = dt.now().timestamp()
-                # Store in memory
+
+                # Store in conversation memory
                 await memory.store(
                     str(target_channel.id),
                     str(bot.user.id),
@@ -118,7 +137,26 @@ def _build(container: Container):
                     "assistant",
                     msg.replace(MESSAGE_DELIMITER, "\n"),
                 )
-                log.info("proactive_message_sent", channel=target_channel.name, length=len(msg))
+
+                # World scan: persist to internal DB + post to feed channel
+                if scan_result:
+                    await memory.store_world_scan(scan_result.topic, scan_result.findings, scan_result.commentary)
+                    # Post to dedicated feed channel if configured
+                    feed_channel_name = "insult-world-feed"
+                    for guild in bot.guilds:
+                        feed = next((ch for ch in guild.text_channels if ch.name == feed_channel_name), None)
+                        if feed and feed.id != target_channel.id:
+                            feed_parts = split_response(msg)
+                            for part in feed_parts:
+                                await feed.send(part)
+                            log.info("world_scan_feed_posted", channel=feed.name)
+
+                log.info(
+                    "proactive_message_sent",
+                    channel=target_channel.name,
+                    length=len(msg),
+                    mode="world_scan" if is_world_scan else "social",
+                )
             except Exception:
                 log.exception("proactive_send_failed")
 

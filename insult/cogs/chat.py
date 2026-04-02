@@ -11,12 +11,20 @@ import discord
 import structlog
 from discord.ext import commands
 
-from insult.core.actions import CHANNEL_TOOLS, execute_create_channel, execute_edit_channel, execute_get_channel_info
+from insult.core.actions import (
+    AUDIO_TOOLS,
+    CHANNEL_TOOLS,
+    IMAGE_TOOLS,
+    execute_create_channel,
+    execute_edit_channel,
+    execute_get_channel_info,
+)
 from insult.core.attachments import process_attachments
 from insult.core.character import build_adaptive_prompt
 from insult.core.delivery import MESSAGE_DELIMITER, send_response
 from insult.core.errors import classify_error, get_error_response
 from insult.core.facts import build_facts_prompt, extract_facts
+from insult.core.flows import ExpressionHistory, analyze_flows, build_flow_prompt, validate_flow_adherence
 from insult.core.llm import WEB_SEARCH_TOOL
 from insult.core.presets import PresetMode, PresetModifier
 from insult.core.reactions import add_reactions, parse_reactions, strip_reactions
@@ -25,6 +33,9 @@ if TYPE_CHECKING:
     from insult.app import Container
 
 log = structlog.get_logger()
+
+# Static tool list — built once, reused every message
+_ALL_TOOLS = list(CHANNEL_TOOLS) + list(IMAGE_TOOLS) + list(AUDIO_TOOLS)
 
 MAX_MESSAGE_LENGTH = 4000
 BATCH_WAIT_SECONDS = 3.0  # Wait this long after last message before responding
@@ -47,6 +58,7 @@ class ChatCog(commands.Cog):
         self.settings = container.settings
         self.bot = container.bot
         self._background_tasks: set[asyncio.Task] = set()
+        self._expression_history = ExpressionHistory()
         self._processed_messages: set[int] = set()  # dedup: prevent double responses
         self._processed_max = 1000  # rotate after this many to prevent memory leak
         # Message batching: accumulate rapid messages, respond to the batch
@@ -180,6 +192,9 @@ class ChatCog(commands.Cog):
         # Load user facts and build prompt
         user_facts = await self._load_facts(user_id)
 
+        # Run flow analysis (depends on preset, so build_adaptive_prompt goes first)
+        context_key = f"{channel_id}:{user_id}"
+        # First pass: get preset from build_adaptive_prompt
         system_prompt, preset = build_adaptive_prompt(
             self.settings.system_prompt,
             profile,
@@ -188,6 +203,12 @@ class ChatCog(commands.Cog):
             recent_messages=recent,
             user_facts=user_facts,
         )
+        # Run 4-flow behavioral analysis
+        flow_analysis = analyze_flows(text, recent, preset, self._expression_history, context_key)
+        # Inject flow guidance as Layer 3.5 (appended after preset, before facts)
+        flow_prompt = build_flow_prompt(flow_analysis)
+        if flow_prompt:
+            system_prompt += f"\n\n{flow_prompt}"
         system_prompt += build_facts_prompt(user_name, user_facts)
 
         if profile and profile.is_confident:
@@ -202,8 +223,8 @@ class ChatCog(commands.Cog):
                 verbosity=round(profile.avg_word_count, 1),
             )
 
-        # Build tools list: channel tools + web search (disabled during crisis)
-        tools = list(CHANNEL_TOOLS)
+        # Build tools list: static tools + web search (disabled during crisis)
+        tools = list(_ALL_TOOLS)
         if preset.mode != PresetMode.RESPECTFUL_SERIOUS:
             tools.append(WEB_SEARCH_TOOL)
 
@@ -234,15 +255,30 @@ class ChatCog(commands.Cog):
         except Exception:
             log.exception("chat_store_response_failed", channel_id=channel_id)
 
-        # Fire background tasks: reactions, tool calls, fact extraction
+        # Fire background tasks: reactions, fact extraction
         if reactions:
             self._spawn_task(add_reactions(message, reactions))
-        if llm_response.tool_calls and message.guild:
-            self._spawn_task(self._execute_tool_calls(message, llm_response.tool_calls))
 
-        # Send response with [SEND] splitting, chunking, and typing delays
+        # Execute media generation BEFORE text (visual/sonic punctuation leads, text follows)
+        # Other tool calls (channels) run in background as before
+        if llm_response.tool_calls:
+            media_names = {"generate_image", "play_audio"}
+            media_calls = [tc for tc in llm_response.tool_calls if tc.name in media_names]
+            other_calls = [tc for tc in llm_response.tool_calls if tc.name not in media_names]
+            for mc in media_calls[:1]:  # Max 1 media per response
+                if mc.name == "generate_image":
+                    await self._execute_image_call(message, mc)
+                elif mc.name == "play_audio":
+                    await self._execute_audio_call(message, mc)
+            if other_calls and message.guild:
+                self._spawn_task(self._execute_tool_calls(message, other_calls))
+
+        # Send text response with [SEND] splitting, chunking, and typing delays
         has_side_effects = bool(reactions or llm_response.tool_calls)
         await send_response(message.channel, response, has_side_effects=has_side_effects)
+
+        # Post-generation flow adherence validation (telemetry only)
+        validate_flow_adherence(response, flow_analysis)
 
         # Background fact extraction
         self._spawn_task(self._extract_user_facts(user_id, user_name, user_facts, recent))
@@ -282,6 +318,45 @@ class ChatCog(commands.Cog):
         task = asyncio.create_task(coro)
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
+
+    async def _execute_image_call(self, message: discord.Message, tool_call):
+        """Send a Pollinations-generated image BEFORE the text response."""
+        from insult.core.images import generate_image
+
+        prompt = tool_call.input.get("prompt", "")
+        model = tool_call.input.get("model", "flux")
+        width = tool_call.input.get("width", 1024)
+        height = tool_call.input.get("height", 1024)
+
+        try:
+            image_data = await generate_image(prompt, model=model, width=width, height=height)
+            if image_data:
+                await message.channel.send(file=discord.File(image_data, "insult.png"))
+            else:
+                log.warning("image_generation_returned_none", prompt=prompt[:80])
+        except Exception:
+            log.exception("image_generation_failed", prompt=prompt[:80])
+
+    async def _execute_audio_call(self, message: discord.Message, tool_call):
+        """Send a YouTube/Freesound audio clip BEFORE the text response."""
+        from insult.core.audio import search_and_clip_youtube, search_freesound
+
+        query = tool_call.input.get("query", "")
+        source = tool_call.input.get("source", "youtube")
+
+        try:
+            if source == "meme":
+                freesound_key = self.settings.freesound_api_key or None
+                audio_data = await search_freesound(query, api_key=freesound_key)
+            else:
+                audio_data = await search_and_clip_youtube(query)
+
+            if audio_data:
+                await message.channel.send(file=discord.File(audio_data, "insult-audio.mp3"))
+            else:
+                log.warning("audio_generation_returned_none", query=query[:80], source=source)
+        except Exception:
+            log.exception("audio_generation_failed", query=query[:80])
 
     async def _execute_tool_calls(self, message: discord.Message, tool_calls: list):
         """Background task: execute tool_use calls from Claude (channel creation, etc.)."""
