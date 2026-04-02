@@ -8,6 +8,8 @@ from insult.core.actions import (
     CHANNEL_TOOLS,
     ToolCall,
     execute_create_channel,
+    execute_edit_channel,
+    execute_get_channel_info,
     sanitize_channel_name,
 )
 
@@ -15,16 +17,32 @@ from insult.core.actions import (
 
 
 class TestChannelTools:
-    def test_tool_exists(self):
-        assert len(CHANNEL_TOOLS) == 1
-        assert CHANNEL_TOOLS[0]["name"] == "create_channel"
+    def test_tools_exist(self):
+        names = [t["name"] for t in CHANNEL_TOOLS]
+        assert "create_channel" in names
+        assert "get_channel_info" in names
+        assert "edit_channel" in names
 
-    def test_required_fields(self):
-        schema = CHANNEL_TOOLS[0]["input_schema"]
+    def test_create_channel_required_fields(self):
+        tool = next(t for t in CHANNEL_TOOLS if t["name"] == "create_channel")
+        schema = tool["input_schema"]
         assert "name" in schema["properties"]
         assert "channel_type" in schema["properties"]
         assert schema["required"] == ["name", "channel_type"]
         assert schema["additionalProperties"] is False
+
+    def test_get_channel_info_no_params(self):
+        tool = next(t for t in CHANNEL_TOOLS if t["name"] == "get_channel_info")
+        schema = tool["input_schema"]
+        assert schema["properties"] == {}
+        assert schema["required"] == []
+
+    def test_edit_channel_optional_params(self):
+        tool = next(t for t in CHANNEL_TOOLS if t["name"] == "edit_channel")
+        schema = tool["input_schema"]
+        assert "name" in schema["properties"]
+        assert "topic" in schema["properties"]
+        assert schema["required"] == []
 
     def test_conforms_to_anthropic_tool_schema(self):
         """Validate tool definitions conform to Anthropic API requirements.
@@ -158,3 +176,77 @@ class TestExecuteCreateChannel:
         )
         await execute_create_channel(mock_guild, tool_call, mock_user)
         mock_guild.create_text_channel.assert_called_once_with("mi-canal-especial")
+
+
+# --- execute_get_channel_info ---
+
+
+class TestExecuteGetChannelInfo:
+    def test_returns_name_and_topic(self):
+        channel = MagicMock()
+        channel.name = "general"
+        channel.topic = "Un canal para hablar de todo"
+        result = execute_get_channel_info(channel)
+        assert result == {"name": "general", "topic": "Un canal para hablar de todo"}
+
+    def test_empty_topic(self):
+        channel = MagicMock()
+        channel.name = "random"
+        channel.topic = None
+        result = execute_get_channel_info(channel)
+        assert result == {"name": "random", "topic": ""}
+
+
+# --- execute_edit_channel ---
+
+
+class TestExecuteEditChannel:
+    @pytest.fixture
+    def mock_channel(self):
+        channel = MagicMock()
+        channel.name = "old-name"
+        channel.guild.name = "TestGuild"
+        channel.guild.me.guild_permissions.manage_channels = True
+        channel.edit = AsyncMock()
+        return channel
+
+    async def test_edits_name(self, mock_channel):
+        tool_call = ToolCall(id="tc_e1", name="edit_channel", input={"name": "new-name"})
+        result = await execute_edit_channel(mock_channel, tool_call)
+        assert result is True
+        mock_channel.edit.assert_called_once_with(name="new-name")
+
+    async def test_edits_topic(self, mock_channel):
+        tool_call = ToolCall(id="tc_e2", name="edit_channel", input={"topic": "nueva descripcion"})
+        result = await execute_edit_channel(mock_channel, tool_call)
+        assert result is True
+        mock_channel.edit.assert_called_once_with(topic="nueva descripcion")
+
+    async def test_edits_both(self, mock_channel):
+        tool_call = ToolCall(id="tc_e3", name="edit_channel", input={"name": "cool-channel", "topic": "lo mas cool"})
+        result = await execute_edit_channel(mock_channel, tool_call)
+        assert result is True
+        mock_channel.edit.assert_called_once_with(name="cool-channel", topic="lo mas cool")
+
+    async def test_no_changes_returns_false(self, mock_channel):
+        tool_call = ToolCall(id="tc_e4", name="edit_channel", input={})
+        result = await execute_edit_channel(mock_channel, tool_call)
+        assert result is False
+        mock_channel.edit.assert_not_called()
+
+    async def test_missing_permissions_returns_false(self, mock_channel):
+        mock_channel.guild.me.guild_permissions.manage_channels = False
+        tool_call = ToolCall(id="tc_e5", name="edit_channel", input={"name": "test"})
+        result = await execute_edit_channel(mock_channel, tool_call)
+        assert result is False
+
+    async def test_sanitizes_name(self, mock_channel):
+        tool_call = ToolCall(id="tc_e6", name="edit_channel", input={"name": "Mi Canal Rudo!!!"})
+        await execute_edit_channel(mock_channel, tool_call)
+        mock_channel.edit.assert_called_once_with(name="mi-canal-rudo")
+
+    async def test_truncates_long_topic(self, mock_channel):
+        tool_call = ToolCall(id="tc_e7", name="edit_channel", input={"topic": "x" * 2000})
+        await execute_edit_channel(mock_channel, tool_call)
+        call_kwargs = mock_channel.edit.call_args.kwargs
+        assert len(call_kwargs["topic"]) == 1024

@@ -126,14 +126,22 @@ _PLAYFUL_PATTERNS = [
     re.compile(r"(?i)\b(que (random|raro|weird)|thats (random|weird))\b"),
 ]
 
-# ACTION_INTENT modifier triggers — user wants channel creation or server actions
+# ACTION_INTENT modifier triggers — user wants channel creation, info, or editing
 _ACTION_INTENT_PATTERNS = [
+    # Channel creation
     re.compile(r"(?i)\b(crea|crear|hazme|haz|arma|armame|pon|ponme)\b.*(canal|channel|espacio|space|sala|room)", re.S),
     re.compile(r"(?i)\b(canal|channel|espacio|space)\b.*(crea|crear|haz|hazme|nuevo|new|privado|private)", re.S),
     re.compile(
         r"(?i)\b(necesito|quiero|dame|give me|i need|i want)\b.*(canal|channel|espacio|space|privado|private)", re.S
     ),
     re.compile(r"(?i)\b(create|make|set up)\b.*(channel|space|room)", re.S),
+    # Channel info / editing
+    re.compile(
+        r"(?i)\b(cambia|cambiar|renombra|rename|edita|edit)\b.*(canal|channel|nombre|name|descripcion|description|topic)",
+        re.S,
+    ),
+    re.compile(r"(?i)\b(canal|channel)\b.*(se llama|nombre|name|descripcion|description|topic)", re.S),
+    re.compile(r"(?i)\b(ponle|cambiale|dale)\b.*(nombre|descripcion|description|topic)", re.S),
 ]
 
 # Stopwords filtered out when checking memory recall overlap
@@ -163,7 +171,10 @@ PRESET_GUIDANCE: dict[PresetMode, str] = {
         "- Each insult should reveal something — about them, about the topic, about the gap in their thinking.\n"
         "- If the conversation is flowing well, don't force conflict. Friction serves engagement, not ego.\n"
         "- You can be brief or expansive. Let the content decide.\n"
-        "- Remember: hard on arguments, soft on personhood. Challenge what they SAY, not what they ARE.\n\n"
+        "- Remember: hard on arguments, soft on personhood. Challenge what they SAY, not what they ARE.\n"
+        "- When an observation crystallizes, distill it into a bold sententia — a standalone truth that doesn't need context. "
+        "One per response max. Zero is fine. Never decorative.\n"
+        "- Close with a statement that lands, not a question that serves. Declarative closure.\n\n"
         "Response length: mostly short (2-3 sentences). Sprinkle micro and ultra-short. "
         "Go medium only when the topic earns it. Rarely long."
     ),
@@ -190,7 +201,10 @@ PRESET_GUIDANCE: dict[PresetMode, str] = {
         "- If they're RIGHT, acknowledge it — grudgingly. 'Ok, fair. But...'\n"
         "- You can go long here. Depth is earned by the topic, not forced.\n"
         "- AVOID: dismissing without engagement. If they brought a real argument, fight it properly.\n"
-        "- AVOID: turning technical critique into personal attack.\n\n"
+        "- AVOID: turning technical critique into personal attack.\n"
+        "- When your analysis converges on a core truth, crystallize it in bold — sententia. "
+        "The takedown builds, the sententia lands. One or two max.\n"
+        "- End with the conclusion, not with 'what do you think?'. Declarative closure.\n\n"
         "Response length: short to medium for probing questions. Medium to long for takedowns. "
         "A single devastating question can be better than a paragraph of analysis."
     ),
@@ -269,6 +283,12 @@ PRESET_GUIDANCE: dict[PresetMode, str] = {
         "- Ideology slogans as complete thoughts. 'Eat the rich' is a bumper sticker, not an argument.\n"
         "- Moralizing without tension. If you're going to critique, make it challenging.\n"
         "- Losing your edge. ARC is sharper, not softer. It's just better aimed.\n\n"
+        "Rhetorical style:\n"
+        "- ARC is where sententia hits hardest. When you've built the systemic analysis, distill it: "
+        "**el problema no es el individuo, es que el sistema esta disenado para que pierda.** "
+        "That's sententia — a crystallized truth in bold that condenses everything around it.\n"
+        "- Use it mid-argument or at the close. One or two per response. Sometimes zero.\n"
+        "- Always declarative closure. No courtesy questions. State. Land. Stop.\n\n"
         "Response length: medium is the natural home here. Short for precision strikes. "
         "Long for genuine systemic analysis. Never micro — these topics deserve engagement. "
         "But a single well-aimed question can be devastating: 'Y a ti que te conviene creer eso?'"

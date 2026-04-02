@@ -11,7 +11,7 @@ import discord
 import structlog
 from discord.ext import commands
 
-from insult.core.actions import CHANNEL_TOOLS, execute_create_channel
+from insult.core.actions import CHANNEL_TOOLS, execute_create_channel, execute_edit_channel, execute_get_channel_info
 from insult.core.attachments import process_attachments
 from insult.core.character import build_adaptive_prompt
 from insult.core.delivery import MESSAGE_DELIMITER, send_response
@@ -286,21 +286,31 @@ class ChatCog(commands.Cog):
     async def _execute_tool_calls(self, message: discord.Message, tool_calls: list):
         """Background task: execute tool_use calls from Claude (channel creation, etc.)."""
         for tool_call in tool_calls:
-            if tool_call.name == "create_channel" and message.guild:
-                try:
+            try:
+                if tool_call.name == "create_channel" and message.guild:
                     channel = await execute_create_channel(message.guild, tool_call, message.author)
                     if channel:
                         await message.channel.send(f"Listo, ahí está: {channel.mention}")
-                        # Generate and post inaugural message in the new channel
                         self._spawn_task(
                             self._inaugurate_channel(channel, tool_call.input.get("name", ""), message.author)
                         )
                     else:
                         log.warning("tool_call_returned_none", tool=tool_call.name)
-                except Exception:
-                    log.exception("tool_call_execution_failed", tool=tool_call.name)
-            else:
-                log.warning("tool_call_unknown", tool=tool_call.name)
+
+                elif tool_call.name == "get_channel_info" and isinstance(message.channel, discord.TextChannel):
+                    info = execute_get_channel_info(message.channel)
+                    topic_display = info["topic"] or "(sin descripción)"
+                    await message.channel.send(f"**#{info['name']}** — {topic_display}")
+
+                elif tool_call.name == "edit_channel" and isinstance(message.channel, discord.TextChannel):
+                    success = await execute_edit_channel(message.channel, tool_call)
+                    if not success:
+                        log.warning("tool_call_edit_failed", tool=tool_call.name)
+
+                else:
+                    log.warning("tool_call_unknown", tool=tool_call.name)
+            except Exception:
+                log.exception("tool_call_execution_failed", tool=tool_call.name)
 
     async def _inaugurate_channel(self, channel: discord.abc.GuildChannel, channel_name: str, creator: discord.Member):
         """Background task: generate a philosophical opening message for a newly created channel."""

@@ -55,6 +55,43 @@ CHANNEL_TOOLS = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "get_channel_info",
+        "description": (
+            "Get the name and description (topic) of the current channel. "
+            "Use this when someone asks about the channel's name, description, or topic. "
+            "This reads the channel where the message was sent — no parameters needed."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "edit_channel",
+        "description": (
+            "Change the name and/or description (topic) of the current channel. "
+            "You MUST call this tool to actually change anything — just saying you changed it does nothing. "
+            "Provide only the fields you want to change."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "New channel name: lowercase, hyphens, no spaces. Omit or empty to keep current name.",
+                },
+                "topic": {
+                    "type": "string",
+                    "description": "New channel description/topic. Omit or empty to keep current topic. Max 1024 chars.",
+                },
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -156,3 +193,60 @@ async def execute_create_channel(
     except discord.HTTPException as e:
         log.error("action_channel_http_error", name=channel_name, error=str(e))
         return None
+
+
+def execute_get_channel_info(channel: discord.TextChannel) -> dict:
+    """Read the name and topic of a text channel.
+
+    Returns a dict with channel info (synchronous — no API call needed).
+    """
+    return {
+        "name": channel.name,
+        "topic": channel.topic or "",
+    }
+
+
+CHANNEL_TOPIC_MAX_LEN = 1024
+
+
+async def execute_edit_channel(
+    channel: discord.TextChannel,
+    tool_call: ToolCall,
+) -> bool:
+    """Edit a channel's name and/or topic based on tool_call input.
+
+    Returns True on success, False on failure.
+    """
+    bot_member = channel.guild.me
+    if not bot_member.guild_permissions.manage_channels:
+        log.warning("action_missing_permission", permission="manage_channels", guild=channel.guild.name)
+        return False
+
+    new_name = tool_call.input.get("name", "")
+    new_topic = tool_call.input.get("topic", "")
+
+    kwargs: dict = {}
+    if new_name:
+        kwargs["name"] = sanitize_channel_name(new_name)
+    if new_topic:
+        kwargs["topic"] = new_topic[:CHANNEL_TOPIC_MAX_LEN]
+
+    if not kwargs:
+        log.warning("action_edit_channel_no_changes")
+        return False
+
+    try:
+        await channel.edit(**kwargs)
+        log.info(
+            "action_channel_edited",
+            channel=channel.name,
+            changes=list(kwargs.keys()),
+            guild=channel.guild.name,
+        )
+        return True
+    except discord.Forbidden:
+        log.error("action_edit_channel_forbidden", channel=channel.name, guild=channel.guild.name)
+        return False
+    except discord.HTTPException as e:
+        log.error("action_edit_channel_http_error", channel=channel.name, error=str(e))
+        return False

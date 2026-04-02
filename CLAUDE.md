@@ -45,6 +45,8 @@ ruff check . && ruff format --check . && pytest -v --cov --cov-fail-under=80 && 
 
 **Reactions** (cogs/chat.py): LLM can include `[REACT:emoji1,emoji2]` in response. Parsed before text processing, executed async in background with human-like delay (0.5-2s). Max 3 reactions. Reaction-only responses (no text) are supported.
 
+**Channel tools** (core/actions.py): 3 tools via Claude tool_use: `create_channel` (private/topic/category), `get_channel_info` (read name+topic of current channel), `edit_channel` (change name and/or topic). All executed in background via `_execute_tool_calls`. ACTION_INTENT modifier in presets forces `tool_choice="any"`.
+
 **Post-generation pipeline** (core/llm.py + core/character.py):
 1. `strip_metadata()` — remove leaked timestamps, speaker labels, `[SEND]` markers
 2. `detect_break()` — 20 regex patterns for character identity leaks → retry with reinforced prompt → sanitize as fallback
