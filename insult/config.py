@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     freesound_api_key: str = ""
 
     # Channel summaries (cross-channel awareness)
-    summary_model: str = "claude-haiku-3-5-20241022"
+    summary_model: str = "claude-haiku-4-5-20251001"
     summary_interval_minutes: int = 15
 
     # Paths
