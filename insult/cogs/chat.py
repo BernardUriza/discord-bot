@@ -329,15 +329,13 @@ class ChatCog(commands.Cog):
             "- DO NOT use markdown headers, bullet points, or structured formatting. Talk like a person.\n"
             "- Length: medium to long. This is a manifesto for the channel, not a tweet.\n"
             "- You can use [SEND] to split into multiple messages for dramatic effect.\n"
+            "- DO NOT call any tools. Just write the text directly.\n"
         )
-
-        tools = [WEB_SEARCH_TOOL]  # Allow web search for grounding the opening
 
         try:
             llm_response = await self.llm.chat(
                 inaugural_prompt,
                 [{"role": "user", "content": f"Inaugura el canal #{channel_name}"}],
-                tools=tools,
             )
             text = llm_response.text
             if text:

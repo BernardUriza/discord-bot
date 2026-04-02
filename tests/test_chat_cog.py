@@ -126,7 +126,6 @@ class TestChatCog:
 
         cog.llm.chat.assert_called_once()
         mock_send.assert_called_once()
-        # Verify web search tool was passed
+        # Verify no tools passed (inauguration is text-only, no tool_use)
         call_kwargs = cog.llm.chat.call_args
-        tools = call_kwargs.kwargs.get("tools", [])
-        assert any(t.get("type") == "web_search_20250305" for t in tools)
+        assert "tools" not in call_kwargs.kwargs
