@@ -43,6 +43,12 @@ class MemoryStore:
         with contextlib.suppress(aiosqlite.OperationalError):
             await self._db.execute("ALTER TABLE messages ADD COLUMN for_user_id TEXT")
 
+        # Migration: add guild_id and channel_name for cross-channel awareness
+        with contextlib.suppress(aiosqlite.OperationalError):
+            await self._db.execute("ALTER TABLE messages ADD COLUMN guild_id TEXT")
+        with contextlib.suppress(aiosqlite.OperationalError):
+            await self._db.execute("ALTER TABLE messages ADD COLUMN channel_name TEXT")
+
         await self._db.execute("""
             CREATE INDEX IF NOT EXISTS idx_channel_ts
             ON messages(channel_id, timestamp DESC)
@@ -87,6 +93,23 @@ class MemoryStore:
         await self._db.execute("""
             CREATE INDEX IF NOT EXISTS idx_world_scans_ts
             ON world_scans(timestamp DESC)
+        """)
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS channel_summaries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                channel_name TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                message_count INTEGER NOT NULL DEFAULT 0,
+                last_message_ts REAL NOT NULL,
+                is_private INTEGER NOT NULL DEFAULT 0,
+                updated_at REAL NOT NULL
+            )
+        """)
+        await self._db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_summaries_guild_channel
+            ON channel_summaries(guild_id, channel_id)
         """)
         await self._db.commit()
 
@@ -138,19 +161,23 @@ class MemoryStore:
         role: str,
         content: str,
         for_user_id: str | None = None,
+        guild_id: str | None = None,
+        channel_name: str | None = None,
     ):
         """Guarda un mensaje en la memoria longitudinal.
 
         Args:
             for_user_id: For assistant messages, the user_id this reply is for.
                          Enables per-user context isolation.
+            guild_id: Discord guild (server) ID for cross-channel awareness.
+            channel_name: Human-readable channel name for summaries.
         """
         await self._ensure_connection()
         try:
             await self._db.execute(
-                "INSERT INTO messages (channel_id, user_id, user_name, role, content, timestamp, for_user_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (channel_id, user_id, user_name, role, content, time.time(), for_user_id),
+                "INSERT INTO messages (channel_id, user_id, user_name, role, content, timestamp, for_user_id, guild_id, channel_name) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (channel_id, user_id, user_name, role, content, time.time(), for_user_id, guild_id, channel_name),
             )
             await self._db.commit()
         except aiosqlite.Error as e:
@@ -399,7 +426,6 @@ class MemoryStore:
             if results:
                 log.info("facts_semantic_search", user_id=user_id, query=query[:50], results=len(results))
                 return results
-            # If search returned nothing, fall back to all facts
             return await self.get_facts(user_id)
         except Exception as e:
             log.warning("facts_semantic_search_failed", user_id=user_id, error=str(e))
@@ -429,3 +455,97 @@ class MemoryStore:
         )
         rows = await cursor.fetchall()
         return [{"topic": r[0], "findings": r[1], "commentary": r[2], "timestamp": r[3]} for r in rows]
+
+    # --- Channel Summaries (cross-channel awareness) ---
+
+    async def get_channel_activity_since(self, guild_id: str, since_ts: float) -> list[dict]:
+        """Returns (channel_id, count) pairs for channels with activity since given timestamp."""
+        await self._ensure_connection()
+        cursor = await self._db.execute(
+            "SELECT channel_id, COUNT(*) as cnt FROM messages "
+            "WHERE guild_id = ? AND timestamp > ? "
+            "GROUP BY channel_id ORDER BY cnt DESC",
+            (guild_id, since_ts),
+        )
+        rows = await cursor.fetchall()
+        return [{"channel_id": r[0], "count": r[1]} for r in rows]
+
+    async def get_recent_for_summary(self, channel_id: str, limit: int = 50) -> list[dict]:
+        """Get recent messages for summarization (used by background task)."""
+        await self._ensure_connection()
+        cursor = await self._db.execute(
+            "SELECT user_name, role, content, timestamp FROM messages "
+            "WHERE channel_id = ? ORDER BY timestamp DESC LIMIT ?",
+            (channel_id, limit),
+        )
+        rows = await cursor.fetchall()
+        return [{"user_name": r[0], "role": r[1], "content": r[2], "timestamp": r[3]} for r in reversed(rows)]
+
+    async def upsert_channel_summary(
+        self,
+        guild_id: str,
+        channel_id: str,
+        channel_name: str,
+        summary: str,
+        message_count: int,
+        last_message_ts: float,
+        is_private: bool = False,
+    ):
+        """Insert or update a channel summary (ON CONFLICT upsert)."""
+        await self._ensure_connection()
+        try:
+            await self._db.execute(
+                "INSERT INTO channel_summaries (guild_id, channel_id, channel_name, summary, message_count, last_message_ts, is_private, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(guild_id, channel_id) DO UPDATE SET "
+                "channel_name=excluded.channel_name, summary=excluded.summary, "
+                "message_count=excluded.message_count, last_message_ts=excluded.last_message_ts, "
+                "is_private=excluded.is_private, updated_at=excluded.updated_at",
+                (
+                    guild_id,
+                    channel_id,
+                    channel_name,
+                    summary,
+                    message_count,
+                    last_message_ts,
+                    int(is_private),
+                    time.time(),
+                ),
+            )
+            await self._db.commit()
+            log.info("channel_summary_upserted", guild_id=guild_id, channel_id=channel_id, channel_name=channel_name)
+        except aiosqlite.Error as e:
+            log.error("channel_summary_upsert_failed", channel_id=channel_id, error=str(e))
+
+    async def get_channel_summaries(
+        self, guild_id: str, exclude_channel_id: str | None = None, limit: int = 8
+    ) -> list[dict]:
+        """Get channel summaries for the server pulse, excluding the current channel."""
+        await self._ensure_connection()
+        if exclude_channel_id:
+            cursor = await self._db.execute(
+                "SELECT channel_id, channel_name, summary, message_count, last_message_ts, is_private, updated_at "
+                "FROM channel_summaries WHERE guild_id = ? AND channel_id != ? "
+                "ORDER BY updated_at DESC LIMIT ?",
+                (guild_id, exclude_channel_id, limit),
+            )
+        else:
+            cursor = await self._db.execute(
+                "SELECT channel_id, channel_name, summary, message_count, last_message_ts, is_private, updated_at "
+                "FROM channel_summaries WHERE guild_id = ? "
+                "ORDER BY updated_at DESC LIMIT ?",
+                (guild_id, limit),
+            )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "channel_id": r[0],
+                "channel_name": r[1],
+                "summary": r[2],
+                "message_count": r[3],
+                "last_message_ts": r[4],
+                "is_private": bool(r[5]),
+                "updated_at": r[6],
+            }
+            for r in rows
+        ]
