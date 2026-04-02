@@ -211,7 +211,7 @@ class TestExpressionSelection:
         )
 
     def test_pressure_5_forces_one_hit(self):
-        shape, reason, _ = _select_shape("test", _preset(), self._pressure(level=5), self._epistemic(), [])
+        shape, _reason, _ = _select_shape("test", _preset(), self._pressure(level=5), self._epistemic(), [])
         assert shape == ResponseShape.ONE_HIT
 
     def test_vulnerable_forces_short(self):
@@ -241,7 +241,7 @@ class TestExpressionSelection:
 
     def test_anti_repetition_rotates_shape(self):
         # If ONE_HIT was used twice, should rotate
-        shape, reason, avoided = _select_shape(
+        shape, _reason, avoided = _select_shape(
             "jaja",
             _preset(PresetMode.PLAYFUL_ROAST),
             self._pressure(),
@@ -253,7 +253,7 @@ class TestExpressionSelection:
 
     def test_anti_repetition_rotates_flavor(self):
         # Same flavor 3x should rotate
-        flavor, reason, avoided = _select_flavor(
+        flavor, _reason, avoided = _select_flavor(
             "test",
             _preset(PresetMode.INTELLECTUAL_PRESSURE),
             self._pressure(),
