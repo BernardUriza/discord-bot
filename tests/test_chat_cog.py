@@ -5,7 +5,7 @@ discord.py's command decorator machinery which expects a real Context.
 The _respond() method uses message.channel.send, not ctx.send.
 """
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -92,3 +92,41 @@ class TestChatCog:
         await self._call_chat(cog, mock_ctx, "hola")
         send_calls = self._channel_send(mock_ctx).call_args_list
         assert len(send_calls) >= 2
+
+    async def test_web_search_tool_included_in_normal_chat(self, cog, mock_ctx):
+        """Web search tool should be passed to LLM for normal messages."""
+        cog.llm.chat = AsyncMock(return_value=LLMResponse(text="respuesta"))
+        await self._call_chat(cog, mock_ctx, "hola que tal")
+        call_kwargs = cog.llm.chat.call_args
+        tools = call_kwargs.kwargs.get("tools", [])
+        tool_types = [t.get("type", "") for t in tools]
+        assert "web_search_20250305" in tool_types
+
+    async def test_web_search_disabled_on_crisis(self, cog, mock_ctx):
+        """Web search should NOT be passed during RESPECTFUL_SERIOUS (crisis)."""
+        cog.llm.chat = AsyncMock(return_value=LLMResponse(text="Habla. Que pasa?"))
+        await self._call_chat(cog, mock_ctx, "me quiero morir")
+        call_kwargs = cog.llm.chat.call_args
+        tools = call_kwargs.kwargs.get("tools", [])
+        tool_types = [t.get("type", "") for t in tools]
+        assert "web_search_20250305" not in tool_types
+
+    @patch("insult.cogs.chat.send_response", new_callable=AsyncMock)
+    async def test_inaugurate_channel_generates_message(self, mock_send, cog):
+        """_inaugurate_channel should call LLM and send response to channel."""
+        cog.llm.chat = AsyncMock(return_value=LLMResponse(text="Bienvenidos a este canal."))
+        mock_channel = MagicMock()
+        mock_channel.name = "filosofia"
+        mock_creator = MagicMock()
+        mock_creator.id = 123
+        mock_creator.display_name = "Bernard"
+        cog.memory.get_facts = AsyncMock(return_value=[])
+
+        await cog._inaugurate_channel(mock_channel, "filosofia", mock_creator)
+
+        cog.llm.chat.assert_called_once()
+        mock_send.assert_called_once()
+        # Verify web search tool was passed
+        call_kwargs = cog.llm.chat.call_args
+        tools = call_kwargs.kwargs.get("tools", [])
+        assert any(t.get("type") == "web_search_20250305" for t in tools)

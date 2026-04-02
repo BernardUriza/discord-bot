@@ -17,7 +17,8 @@ from insult.core.character import build_adaptive_prompt
 from insult.core.delivery import MESSAGE_DELIMITER, send_response
 from insult.core.errors import classify_error, get_error_response
 from insult.core.facts import build_facts_prompt, extract_facts
-from insult.core.presets import PresetModifier
+from insult.core.llm import WEB_SEARCH_TOOL
+from insult.core.presets import PresetMode, PresetModifier
 from insult.core.reactions import add_reactions, parse_reactions, strip_reactions
 
 if TYPE_CHECKING:
@@ -201,13 +202,18 @@ class ChatCog(commands.Cog):
                 verbosity=round(profile.avg_word_count, 1),
             )
 
+        # Build tools list: channel tools + web search (disabled during crisis)
+        tools = list(CHANNEL_TOOLS)
+        if preset.mode != PresetMode.RESPECTFUL_SERIOUS:
+            tools.append(WEB_SEARCH_TOOL)
+
         # If user wants a server action, force tool_choice="any" so Claude MUST use the tool.
         force_tool = PresetModifier.ACTION_INTENT in preset.modifiers
         tool_choice = {"type": "any"} if force_tool else None
 
         try:
             async with message.channel.typing():
-                llm_response = await self.llm.chat(system_prompt, context, tools=CHANNEL_TOOLS, tool_choice=tool_choice)
+                llm_response = await self.llm.chat(system_prompt, context, tools=tools, tool_choice=tool_choice)
         except Exception as e:
             log.exception("chat_llm_failed", channel_id=channel_id, error_type=type(e).__name__)
             await message.channel.send(get_error_response(classify_error(e)))
@@ -285,12 +291,60 @@ class ChatCog(commands.Cog):
                     channel = await execute_create_channel(message.guild, tool_call, message.author)
                     if channel:
                         await message.channel.send(f"Listo, ahí está: {channel.mention}")
+                        # Generate and post inaugural message in the new channel
+                        self._spawn_task(
+                            self._inaugurate_channel(channel, tool_call.input.get("name", ""), message.author)
+                        )
                     else:
                         log.warning("tool_call_returned_none", tool=tool_call.name)
                 except Exception:
                     log.exception("tool_call_execution_failed", tool=tool_call.name)
             else:
                 log.warning("tool_call_unknown", tool=tool_call.name)
+
+    async def _inaugurate_channel(self, channel: discord.abc.GuildChannel, channel_name: str, creator: discord.Member):
+        """Background task: generate a philosophical opening message for a newly created channel."""
+        from insult.core.character import _get_current_time_context
+
+        time_ctx = _get_current_time_context()
+
+        # Load facts about the creator for personalization
+        creator_facts = await self._load_facts(str(creator.id))
+        facts_str = ", ".join(f["fact"] for f in creator_facts) if creator_facts else "no los conozco todavia"
+
+        inaugural_prompt = (
+            f"{self.settings.system_prompt}\n\n"
+            f"## Current Time\n{time_ctx}\n\n"
+            "## Special Task: Channel Inauguration\n"
+            f"You just created a new channel called #{channel_name}. "
+            f"The person who asked for it is {creator.display_name}. "
+            f"What you know about them: {facts_str}.\n\n"
+            "Write an opening message for this channel. This is YOUR territory — make it count.\n\n"
+            "Requirements:\n"
+            "- Open with something philosophical, provocative, or deeply interesting about the channel's topic\n"
+            "- Ask 2-3 questions that would make people WANT to participate — uncomfortable, interesting, real questions\n"
+            "- Keep your personality: sharp, system-critical, anti-domination, curious, never bland\n"
+            "- Reference the time of day, your mood, the creator — make it feel alive, not templated\n"
+            "- If the topic relates to ethics, power, systems, animals, capitalism — go deeper\n"
+            "- DO NOT use markdown headers, bullet points, or structured formatting. Talk like a person.\n"
+            "- Length: medium to long. This is a manifesto for the channel, not a tweet.\n"
+            "- You can use [SEND] to split into multiple messages for dramatic effect.\n"
+        )
+
+        tools = [WEB_SEARCH_TOOL]  # Allow web search for grounding the opening
+
+        try:
+            llm_response = await self.llm.chat(
+                inaugural_prompt,
+                [{"role": "user", "content": f"Inaugura el canal #{channel_name}"}],
+                tools=tools,
+            )
+            text = llm_response.text
+            if text:
+                await send_response(channel, text)
+                log.info("channel_inaugurated", channel=channel_name, length=len(text))
+        except Exception:
+            log.exception("channel_inauguration_failed", channel=channel_name)
 
     async def _extract_user_facts(self, user_id: str, user_name: str, existing_facts: list[dict], recent: list[dict]):
         """Background task: extract user facts from recent conversation."""

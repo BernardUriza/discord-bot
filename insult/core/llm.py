@@ -21,8 +21,21 @@ class LLMResponse:
     tool_calls: list[ToolCall] = field(default_factory=list)
 
 
+# Web search tool definition — Claude's native server-side search
+WEB_SEARCH_TOOL = {
+    "type": "web_search_20250305",
+    "name": "web_search",
+    "max_uses": 3,
+}
+
+
 def _parse_response_content(content: list) -> LLMResponse:
-    """Extract text and tool_use blocks from Claude API response content."""
+    """Extract text and tool_use blocks from Claude API response content.
+
+    Handles standard text, tool_use (channel creation), and server-side
+    blocks (web_search server_tool_use / web_search_tool_result) which
+    are processed transparently by the API — we just skip them.
+    """
     text_parts: list[str] = []
     tool_calls: list[ToolCall] = []
 
@@ -31,6 +44,8 @@ def _parse_response_content(content: list) -> LLMResponse:
             text_parts.append(block.text)
         elif block.type == "tool_use":
             tool_calls.append(ToolCall(id=block.id, name=block.name, input=block.input))
+        # server_tool_use and web_search_tool_result are handled server-side
+        # by Claude — we just skip them in parsing
 
     return LLMResponse(text="\n".join(text_parts).strip(), tool_calls=tool_calls)
 
