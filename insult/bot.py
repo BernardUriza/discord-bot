@@ -2,6 +2,7 @@
 
 import asyncio
 import signal
+import time as _time
 
 import structlog
 from discord.ext import commands, tasks
@@ -19,6 +20,7 @@ from insult.core.proactive import (
     should_send_now,
     should_world_scan,
 )
+from insult.core.reminders import compute_next_occurrence
 
 log = structlog.get_logger()
 
@@ -32,6 +34,8 @@ def _build(container: Container):
     async def graceful_shutdown(sig: signal.Signals):
         log.info("shutdown_signal", signal=sig.name)
         _health_check.cancel()
+        if _reminder_check_task.is_running():
+            _reminder_check_task.cancel()
         if _summarize_channels_task.is_running():
             _summarize_channels_task.cancel()
         if _backup_task.is_running():
@@ -219,6 +223,65 @@ def _build(container: Container):
         except Exception:
             log.exception("channel_summarization_task_failed")
 
+    # --- Reminder Delivery (check every 30s for due reminders) ---
+    @tasks.loop(seconds=30)
+    async def _reminder_check_task():
+        try:
+            now = _time.time()
+            pending = await memory.get_pending_reminders(now)
+            for reminder in pending:
+                channel = bot.get_channel(int(reminder["channel_id"]))
+                if not channel:
+                    await memory.mark_reminder_delivered(reminder["id"])
+                    log.warning("reminder_channel_gone", reminder_id=reminder["id"], channel_id=reminder["channel_id"])
+                    continue
+
+                # Build mention string
+                mentions = ""
+                if reminder["mention_user_ids"]:
+                    user_ids = reminder["mention_user_ids"].split(",")
+                    mentions = " ".join(f"<@{uid.strip()}>" for uid in user_ids if uid.strip())
+
+                # Generate in-character reminder via LLM
+                reminder_prompt = (
+                    f"{container.settings.system_prompt[:2000]}\n\n"
+                    "## Special Task: Deliver a Reminder\n"
+                    f"You need to deliver a reminder. The reminder is: '{reminder['description']}'. "
+                    "Deliver it in-character — short, punchy, maybe a bit aggressive. "
+                    "Don't explain you're a bot delivering a reminder. Just remind them naturally. "
+                    "1-2 sentences max."
+                )
+
+                try:
+                    response = await container.llm.chat(
+                        reminder_prompt,
+                        [{"role": "user", "content": f"Recordatorio: {reminder['description']}"}],
+                    )
+                    text = response.text.strip()
+                except Exception:
+                    log.exception("reminder_llm_failed", reminder_id=reminder["id"])
+                    text = f"\u23f0 Recordatorio: {reminder['description']}"
+
+                msg = f"{mentions} {text}".strip() if mentions else text
+                try:
+                    await channel.send(msg)
+                except Exception:
+                    log.exception("reminder_send_failed", reminder_id=reminder["id"])
+
+                # Handle recurring
+                if reminder["recurring"] != "none":
+                    next_time = compute_next_occurrence(reminder["remind_at"], reminder["recurring"])
+                    if next_time:
+                        await memory.update_reminder_time(reminder["id"], next_time)
+                    else:
+                        await memory.mark_reminder_delivered(reminder["id"])
+                else:
+                    await memory.mark_reminder_delivered(reminder["id"])
+
+                log.info("reminder_delivered", reminder_id=reminder["id"], channel_id=reminder["channel_id"])
+        except Exception:
+            log.exception("reminder_check_failed")
+
     # --- Health Check ---
     @tasks.loop(seconds=60)
     async def _health_check():
@@ -250,6 +313,7 @@ def _build(container: Container):
             await bot.add_cog(UtilityCog(container))
             await bot.add_cog(VoiceCog(container))
             _health_check.start()
+            _reminder_check_task.start()
             _proactive_task.start()
             _summarize_channels_task.start()
             if is_azure_configured():

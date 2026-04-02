@@ -111,6 +111,24 @@ class MemoryStore:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_summaries_guild_channel
             ON channel_summaries(guild_id, channel_id)
         """)
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS reminders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id TEXT NOT NULL,
+                guild_id TEXT,
+                created_by TEXT NOT NULL,
+                description TEXT NOT NULL,
+                remind_at REAL NOT NULL,
+                mention_user_ids TEXT NOT NULL DEFAULT '',
+                recurring TEXT NOT NULL DEFAULT 'none',
+                delivered INTEGER NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL
+            )
+        """)
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_reminders_pending
+            ON reminders(delivered, remind_at)
+        """)
         await self._db.commit()
 
         # Initialize vector search (sqlite-vec + FTS5)
@@ -549,3 +567,120 @@ class MemoryStore:
             }
             for r in rows
         ]
+
+    # --- Reminders ---
+
+    async def save_reminder(
+        self,
+        channel_id: str,
+        guild_id: str | None,
+        created_by: str,
+        description: str,
+        remind_at: float,
+        mention_user_ids: str = "",
+        recurring: str = "none",
+    ) -> int:
+        """Save a new reminder. Returns the reminder ID."""
+        await self._ensure_connection()
+        try:
+            cursor = await self._db.execute(
+                "INSERT INTO reminders (channel_id, guild_id, created_by, description, remind_at, "
+                "mention_user_ids, recurring, delivered, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
+                (channel_id, guild_id, created_by, description, remind_at, mention_user_ids, recurring, time.time()),
+            )
+            await self._db.commit()
+            reminder_id = cursor.lastrowid
+            log.info(
+                "reminder_saved",
+                reminder_id=reminder_id,
+                channel_id=channel_id,
+                description=description[:80],
+                remind_at=remind_at,
+            )
+            return reminder_id
+        except aiosqlite.Error as e:
+            log.error("reminder_save_failed", channel_id=channel_id, error=str(e))
+            raise
+
+    async def get_pending_reminders(self, now: float) -> list[dict]:
+        """Get all reminders that are due (remind_at <= now and not delivered)."""
+        await self._ensure_connection()
+        cursor = await self._db.execute(
+            "SELECT id, channel_id, guild_id, created_by, description, remind_at, "
+            "mention_user_ids, recurring FROM reminders "
+            "WHERE delivered = 0 AND remind_at <= ? ORDER BY remind_at ASC",
+            (now,),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "channel_id": r[1],
+                "guild_id": r[2],
+                "created_by": r[3],
+                "description": r[4],
+                "remind_at": r[5],
+                "mention_user_ids": r[6],
+                "recurring": r[7],
+            }
+            for r in rows
+        ]
+
+    async def mark_reminder_delivered(self, reminder_id: int) -> None:
+        """Mark a reminder as delivered."""
+        await self._ensure_connection()
+        try:
+            await self._db.execute("UPDATE reminders SET delivered = 1 WHERE id = ?", (reminder_id,))
+            await self._db.commit()
+        except aiosqlite.Error as e:
+            log.error("reminder_mark_delivered_failed", reminder_id=reminder_id, error=str(e))
+
+    async def update_reminder_time(self, reminder_id: int, new_remind_at: float) -> None:
+        """Update the remind_at time for a recurring reminder."""
+        await self._ensure_connection()
+        try:
+            await self._db.execute("UPDATE reminders SET remind_at = ? WHERE id = ?", (new_remind_at, reminder_id))
+            await self._db.commit()
+        except aiosqlite.Error as e:
+            log.error("reminder_update_time_failed", reminder_id=reminder_id, error=str(e))
+
+    async def get_channel_reminders(self, channel_id: str) -> list[dict]:
+        """Get all pending (not delivered) reminders for a channel."""
+        await self._ensure_connection()
+        cursor = await self._db.execute(
+            "SELECT id, channel_id, guild_id, created_by, description, remind_at, "
+            "mention_user_ids, recurring FROM reminders "
+            "WHERE channel_id = ? AND delivered = 0 ORDER BY remind_at ASC",
+            (channel_id,),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "channel_id": r[1],
+                "guild_id": r[2],
+                "created_by": r[3],
+                "description": r[4],
+                "remind_at": r[5],
+                "mention_user_ids": r[6],
+                "recurring": r[7],
+            }
+            for r in rows
+        ]
+
+    async def delete_reminder(self, reminder_id: int) -> bool:
+        """Delete a reminder by ID. Returns True if a row was deleted."""
+        await self._ensure_connection()
+        try:
+            cursor = await self._db.execute("DELETE FROM reminders WHERE id = ? AND delivered = 0", (reminder_id,))
+            await self._db.commit()
+            deleted = cursor.rowcount > 0
+            if deleted:
+                log.info("reminder_deleted", reminder_id=reminder_id)
+            else:
+                log.warning("reminder_delete_not_found", reminder_id=reminder_id)
+            return deleted
+        except aiosqlite.Error as e:
+            log.error("reminder_delete_failed", reminder_id=reminder_id, error=str(e))
+            return False

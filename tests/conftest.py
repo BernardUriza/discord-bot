@@ -29,6 +29,13 @@ def mock_memory():
     mem.get_channel_activity_since = AsyncMock(return_value=[])
     mem.get_recent_for_summary = AsyncMock(return_value=[])
     mem.upsert_channel_summary = AsyncMock()
+    # Reminder methods
+    mem.save_reminder = AsyncMock(return_value=1)
+    mem.get_pending_reminders = AsyncMock(return_value=[])
+    mem.mark_reminder_delivered = AsyncMock()
+    mem.update_reminder_time = AsyncMock()
+    mem.get_channel_reminders = AsyncMock(return_value=[])
+    mem.delete_reminder = AsyncMock(return_value=True)
     return mem
 
 

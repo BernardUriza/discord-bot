@@ -28,6 +28,7 @@ from insult.core.flows import ExpressionHistory, analyze_flows, build_flow_promp
 from insult.core.llm import WEB_SEARCH_TOOL
 from insult.core.presets import PresetMode, PresetModifier
 from insult.core.reactions import add_reactions, parse_reactions, strip_reactions
+from insult.core.reminders import REMINDER_TOOLS, format_reminder_list, parse_remind_at
 from insult.core.summaries import build_server_pulse, filter_by_permissions
 
 if TYPE_CHECKING:
@@ -36,7 +37,7 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 # Static tool list — built once, reused every message
-_ALL_TOOLS = list(CHANNEL_TOOLS) + list(IMAGE_TOOLS) + list(AUDIO_TOOLS)
+_ALL_TOOLS = list(CHANNEL_TOOLS) + list(IMAGE_TOOLS) + list(AUDIO_TOOLS) + list(REMINDER_TOOLS)
 
 MAX_MESSAGE_LENGTH = 4000
 BATCH_WAIT_SECONDS = 3.0  # Wait this long after last message before responding
@@ -304,13 +305,20 @@ class ChatCog(commands.Cog):
         media_sent = False
         if llm_response.tool_calls:
             media_names = {"generate_image", "play_audio"}
+            reminder_names = {"create_reminder", "list_reminders", "cancel_reminder"}
             media_calls = [tc for tc in llm_response.tool_calls if tc.name in media_names]
-            other_calls = [tc for tc in llm_response.tool_calls if tc.name not in media_names]
+            reminder_calls = [tc for tc in llm_response.tool_calls if tc.name in reminder_names]
+            other_calls = [
+                tc for tc in llm_response.tool_calls if tc.name not in media_names and tc.name not in reminder_names
+            ]
             for mc in media_calls[:1]:  # Max 1 media per response
                 if mc.name == "generate_image":
                     media_sent = await self._execute_image_call(message, mc)
                 elif mc.name == "play_audio":
                     media_sent = await self._execute_audio_call(message, mc)
+            # Execute reminder tools (synchronous — result may affect response)
+            for rc in reminder_calls:
+                self._spawn_task(self._execute_reminder_call(message, rc))
             if other_calls and message.guild:
                 self._spawn_task(self._execute_tool_calls(message, other_calls))
 
@@ -436,6 +444,55 @@ class ChatCog(commands.Cog):
         except Exception:
             log.exception("audio_generation_failed", query=query[:80])
             return False
+
+    async def _execute_reminder_call(self, message: discord.Message, tool_call) -> None:
+        """Execute a reminder tool call (create, list, or cancel)."""
+        try:
+            if tool_call.name == "create_reminder":
+                description = tool_call.input.get("description", "")
+                remind_at_str = tool_call.input.get("remind_at", "")
+                mention_ids = tool_call.input.get("mention_user_ids", [])
+                recurring = tool_call.input.get("recurring", "none")
+
+                remind_at = parse_remind_at(remind_at_str)
+                if remind_at is None:
+                    log.warning("reminder_invalid_time", remind_at=remind_at_str)
+                    return
+
+                mention_str = ",".join(mention_ids) if mention_ids else ""
+                guild_id = str(message.guild.id) if message.guild else None
+
+                reminder_id = await self.memory.save_reminder(
+                    channel_id=str(message.channel.id),
+                    guild_id=guild_id,
+                    created_by=str(message.author.id),
+                    description=description,
+                    remind_at=remind_at,
+                    mention_user_ids=mention_str,
+                    recurring=recurring,
+                )
+                log.info(
+                    "reminder_created",
+                    reminder_id=reminder_id,
+                    description=description[:80],
+                    remind_at=remind_at_str,
+                    recurring=recurring,
+                )
+
+            elif tool_call.name == "list_reminders":
+                channel_id = tool_call.input.get("channel_id", str(message.channel.id))
+                reminders = await self.memory.get_channel_reminders(channel_id)
+                formatted = format_reminder_list(reminders)
+                await message.channel.send(formatted)
+
+            elif tool_call.name == "cancel_reminder":
+                reminder_id = tool_call.input.get("reminder_id", 0)
+                deleted = await self.memory.delete_reminder(reminder_id)
+                if not deleted:
+                    log.warning("reminder_cancel_not_found", reminder_id=reminder_id)
+
+        except Exception:
+            log.exception("reminder_tool_call_failed", tool=tool_call.name)
 
     async def _execute_tool_calls(self, message: discord.Message, tool_calls: list):
         """Background task: execute tool_use calls from Claude (channel creation, etc.)."""
