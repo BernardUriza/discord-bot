@@ -20,6 +20,7 @@ class MemoryStore:
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self._db: aiosqlite.Connection | None = None
+        self._vectors_available: bool = False
 
     async def connect(self):
         self._db = await aiosqlite.connect(self.db_path)
@@ -88,6 +89,23 @@ class MemoryStore:
             ON world_scans(timestamp DESC)
         """)
         await self._db.commit()
+
+        # Initialize vector search (sqlite-vec + FTS5)
+        try:
+            import sqlite_vec
+
+            self._db._conn.enable_load_extension(True)
+            sqlite_vec.load(self._db._conn)
+
+            from insult.core.vectors import init_vector_tables
+
+            await init_vector_tables(self._db)
+            self._vectors_available = True
+            log.info("vectors_initialized")
+        except Exception as e:
+            log.warning("vectors_not_available", reason=str(e))
+            self._vectors_available = False
+
         log.info("memory_connected", db_path=str(self.db_path))
 
     async def _ensure_connection(self):
@@ -353,8 +371,39 @@ class MemoryStore:
                 )
             await self._db.commit()
             log.info("facts_saved", user_id=user_id, count=len(facts))
+
+            # Update vector embeddings if available
+            if self._vectors_available:
+                try:
+                    from insult.core.vectors import upsert_fact_vectors
+
+                    await upsert_fact_vectors(self._db, user_id, facts)
+                except Exception as ve:
+                    log.warning("facts_vector_upsert_failed", user_id=user_id, error=str(ve))
         except aiosqlite.Error as e:
             log.error("facts_save_failed", user_id=user_id, error=str(e))
+
+    async def search_facts_semantic(self, user_id: str, query: str, limit: int = 10) -> list[dict]:
+        """Search user facts by semantic similarity using hybrid vector + FTS search.
+
+        Falls back to returning all facts if vectors are not available.
+        """
+        if not self._vectors_available:
+            return await self.get_facts(user_id)
+
+        await self._ensure_connection()
+        try:
+            from insult.core.vectors import search_facts_hybrid
+
+            results = await search_facts_hybrid(self._db, user_id, query, limit=limit)
+            if results:
+                log.info("facts_semantic_search", user_id=user_id, query=query[:50], results=len(results))
+                return results
+            # If search returned nothing, fall back to all facts
+            return await self.get_facts(user_id)
+        except Exception as e:
+            log.warning("facts_semantic_search_failed", user_id=user_id, error=str(e))
+            return await self.get_facts(user_id)
 
     # --- World Scans (Insult's internal knowledge of the world) ---
 

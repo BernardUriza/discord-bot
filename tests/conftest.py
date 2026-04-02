@@ -25,6 +25,10 @@ def mock_memory():
     mem.build_context = MagicMock(return_value=[])
     mem.connect = AsyncMock()
     mem.close = AsyncMock()
+    mem.get_channel_summaries = AsyncMock(return_value=[])
+    mem.get_channel_activity_since = AsyncMock(return_value=[])
+    mem.get_recent_for_summary = AsyncMock(return_value=[])
+    mem.upsert_channel_summary = AsyncMock()
     return mem
 
 

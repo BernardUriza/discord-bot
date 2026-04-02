@@ -108,7 +108,15 @@ async def extract_facts(
 
 
 def build_facts_prompt(user_name: str, facts: list[dict]) -> str:
-    """Build a system prompt section with the user's known facts."""
+    """Build a system prompt section with the user's known facts.
+
+    When called with semantically-searched facts (via search_facts_semantic),
+    the facts are already filtered to the most relevant ones for the current
+    message. When called with all facts (fallback), all facts are included.
+
+    Callers should use semantic search when len(facts) > 5 to avoid bloating
+    the system prompt with irrelevant facts.
+    """
     if not facts:
         return ""
 

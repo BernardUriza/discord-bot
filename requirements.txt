@@ -16,6 +16,11 @@ openai>=1.30.0
 # Audio clips (YouTube search + download for sonic punctuation)
 yt-dlp>=2025.1.0
 
+# Vector search (semantic fact retrieval)
+sqlite-vec>=0.1.6
+sentence-transformers>=3.0.0
+numpy
+
 # Testing
 pytest>=8.0.0
 pytest-asyncio>=0.24.0

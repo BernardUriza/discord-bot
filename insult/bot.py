@@ -32,6 +32,8 @@ def _build(container: Container):
     async def graceful_shutdown(sig: signal.Signals):
         log.info("shutdown_signal", signal=sig.name)
         _health_check.cancel()
+        if _summarize_channels_task.is_running():
+            _summarize_channels_task.cancel()
         if _backup_task.is_running():
             _backup_task.cancel()
         await memory.close()
@@ -160,6 +162,63 @@ def _build(container: Container):
             except Exception:
                 log.exception("proactive_send_failed")
 
+    # --- Channel Summarization (cross-channel awareness, every 15 min) ---
+    @tasks.loop(minutes=container.settings.summary_interval_minutes)
+    async def _summarize_channels_task():
+        from insult.core.summaries import summarize_channel
+
+        try:
+            now_ts = __import__("time").time()
+            # Summarize channels with 10+ new messages since last summary
+            channels_processed = 0
+            max_per_tick = 10
+
+            for guild in bot.guilds:
+                guild_id = str(guild.id)
+                # Get activity since 1 hour ago (fallback window for new channels)
+                since_ts = now_ts - 3600
+                activity = await memory.get_channel_activity_since(guild_id, since_ts)
+
+                for item in activity:
+                    if channels_processed >= max_per_tick:
+                        break
+                    if item["count"] < 10:
+                        continue
+
+                    ch_id = item["channel_id"]
+                    # Find the Discord channel object for name + privacy info
+                    channel = guild.get_channel(int(ch_id))
+                    if channel is None:
+                        continue
+
+                    ch_name = channel.name
+                    is_private = not channel.permissions_for(guild.default_role).read_messages
+
+                    messages = await memory.get_recent_for_summary(ch_id, limit=50)
+                    if not messages:
+                        continue
+
+                    summary = await summarize_channel(
+                        container.llm.client,
+                        container.settings.summary_model,
+                        ch_name,
+                        messages,
+                    )
+                    if summary:
+                        last_ts = messages[-1]["timestamp"] if messages else now_ts
+                        await memory.upsert_channel_summary(
+                            guild_id, ch_id, ch_name, summary, item["count"], last_ts, is_private
+                        )
+                        channels_processed += 1
+
+                if channels_processed >= max_per_tick:
+                    break
+
+            if channels_processed > 0:
+                log.info("channel_summaries_updated", count=channels_processed)
+        except Exception:
+            log.exception("channel_summarization_task_failed")
+
     # --- Health Check ---
     @tasks.loop(seconds=60)
     async def _health_check():
@@ -192,6 +251,7 @@ def _build(container: Container):
             await bot.add_cog(VoiceCog(container))
             _health_check.start()
             _proactive_task.start()
+            _summarize_channels_task.start()
             if is_azure_configured():
                 _backup_task.start()
             _ready_fired = True

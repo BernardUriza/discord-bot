@@ -197,6 +197,7 @@ def build_adaptive_prompt(
     recent_messages: list[dict] | None = None,
     user_facts: list[dict] | None = None,
     flow_analysis: FlowAnalysis | None = None,
+    server_pulse: str = "",
 ) -> tuple[str, PresetSelection]:
     """Compose system prompt using layered architecture:
 
@@ -238,6 +239,10 @@ def build_adaptive_prompt(
         flow_prompt = build_flow_prompt(flow_analysis)
         if flow_prompt:
             prompt += f"\n\n{flow_prompt}"
+
+    # --- Layer 3.7: Server Pulse (cross-channel awareness) ---
+    if server_pulse:
+        prompt += f"\n\n{server_pulse}"
 
     # --- Layer 4: Style adaptation (per-user) ---
     if profile and profile.is_confident:

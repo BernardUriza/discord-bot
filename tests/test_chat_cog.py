@@ -37,7 +37,12 @@ class TestChatCog:
     async def test_stores_user_message(self, cog, mock_ctx):
         cog.llm.chat = AsyncMock(return_value=LLMResponse(text="respuesta"))
         await self._call_chat(cog, mock_ctx, "hola wey")
-        cog.memory.store.assert_any_call(
+        # Verify user message was stored (with guild_id and channel_name kwargs)
+        store_calls = cog.memory.store.call_args_list
+        user_calls = [c for c in store_calls if c.args[3] == "user"]
+        assert len(user_calls) >= 1
+        call = user_calls[0]
+        assert call.args[:5] == (
             str(mock_ctx.message.channel.id),
             str(mock_ctx.author.id),
             mock_ctx.author.display_name,
@@ -59,14 +64,19 @@ class TestChatCog:
     async def test_stores_assistant_response(self, cog, mock_ctx):
         cog.llm.chat = AsyncMock(return_value=LLMResponse(text="respuesta del bot"))
         await self._call_chat(cog, mock_ctx, "hola")
-        cog.memory.store.assert_any_call(
+        # Verify assistant response was stored (with guild_id and channel_name kwargs)
+        store_calls = cog.memory.store.call_args_list
+        assistant_calls = [c for c in store_calls if c.args[3] == "assistant"]
+        assert len(assistant_calls) >= 1
+        call = assistant_calls[0]
+        assert call.args[:5] == (
             str(mock_ctx.message.channel.id),
             str(cog.bot.user.id),
             cog.bot.user.name,
             "assistant",
             "respuesta del bot",
-            for_user_id=str(mock_ctx.author.id),
         )
+        assert call.kwargs.get("for_user_id") == str(mock_ctx.author.id)
 
     async def test_handles_llm_error_gracefully(self, cog, mock_ctx):
         cog.llm.chat = AsyncMock(side_effect=RuntimeError("something broke"))

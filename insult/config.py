@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     # Freesound (optional — for meme sound effects)
     freesound_api_key: str = ""
 
+    # Channel summaries (cross-channel awareness)
+    summary_model: str = "claude-haiku-3-5-20241022"
+    summary_interval_minutes: int = 15
+
     # Paths
     storage_dir: Path = _PROJECT_ROOT / "storage"
     db_path: Path = _PROJECT_ROOT / "storage" / "memory.db"

@@ -28,6 +28,7 @@ from insult.core.flows import ExpressionHistory, analyze_flows, build_flow_promp
 from insult.core.llm import WEB_SEARCH_TOOL
 from insult.core.presets import PresetMode, PresetModifier
 from insult.core.reactions import add_reactions, parse_reactions, strip_reactions
+from insult.core.summaries import build_server_pulse, filter_by_permissions
 
 if TYPE_CHECKING:
     from insult.app import Container
@@ -111,6 +112,8 @@ class ChatCog(commands.Cog):
                     message.author.display_name,
                     "user",
                     text,
+                    guild_id=str(message.guild.id) if message.guild else None,
+                    channel_name=message.channel.name if hasattr(message.channel, "name") else None,
                 )
             except Exception:
                 log.exception("chat_store_cooldown_failed")
@@ -173,8 +176,19 @@ class ChatCog(commands.Cog):
             for err in errors:
                 await message.channel.send(err)
 
+        guild_id = str(message.guild.id) if message.guild else None
+        channel_name = message.channel.name if hasattr(message.channel, "name") else None
+
         try:
-            await self.memory.store(channel_id, user_id, user_name, "user", text)
+            await self.memory.store(
+                channel_id,
+                user_id,
+                user_name,
+                "user",
+                text,
+                guild_id=guild_id,
+                channel_name=channel_name,
+            )
         except Exception:
             log.exception("chat_store_user_failed", channel_id=channel_id)
 
@@ -189,8 +203,26 @@ class ChatCog(commands.Cog):
             await message.channel.send(get_error_response("context_failed"))
             return
 
-        # Load user facts and build prompt
-        user_facts = await self._load_facts(user_id)
+        # Load user facts — use semantic search for relevance when many facts exist
+        user_facts = await self._load_facts_smart(user_id, text)
+
+        # Build server pulse (cross-channel awareness)
+        server_pulse = ""
+        if message.guild:
+            try:
+                summaries = await self.memory.get_channel_summaries(
+                    str(message.guild.id), exclude_channel_id=channel_id
+                )
+                if summaries:
+                    accessible = {
+                        str(ch.id)
+                        for ch in message.guild.text_channels
+                        if ch.permissions_for(message.author).read_messages
+                    }
+                    summaries = filter_by_permissions(summaries, accessible)
+                    server_pulse = build_server_pulse(summaries, text)
+            except Exception:
+                log.exception("chat_server_pulse_failed", guild_id=str(message.guild.id))
 
         # Run flow analysis (depends on preset, so build_adaptive_prompt goes first)
         context_key = f"{channel_id}:{user_id}"
@@ -202,6 +234,7 @@ class ChatCog(commands.Cog):
             current_message=text,
             recent_messages=recent,
             user_facts=user_facts,
+            server_pulse=server_pulse,
         )
         # Run 4-flow behavioral analysis
         flow_analysis = analyze_flows(text, recent, preset, self._expression_history, context_key)
@@ -250,7 +283,14 @@ class ChatCog(commands.Cog):
         clean_response = response.replace(MESSAGE_DELIMITER, "\n")
         try:
             await self.memory.store(
-                channel_id, str(self.bot.user.id), self.bot.user.name, "assistant", clean_response, for_user_id=user_id
+                channel_id,
+                str(self.bot.user.id),
+                self.bot.user.name,
+                "assistant",
+                clean_response,
+                for_user_id=user_id,
+                guild_id=guild_id,
+                channel_name=channel_name,
             )
         except Exception:
             log.exception("chat_store_response_failed", channel_id=channel_id)
@@ -318,6 +358,29 @@ class ChatCog(commands.Cog):
         except Exception:
             log.exception("chat_facts_load_failed", user_id=user_id)
             return []
+
+    async def _load_facts_smart(self, user_id: str, query: str) -> list[dict]:
+        """Load user facts with semantic search when there are many facts.
+
+        Uses vector similarity search to return only the most relevant facts
+        for the current message. Falls back to all facts if semantic search
+        is unavailable or there are few facts.
+        """
+        try:
+            all_facts = await self.memory.get_facts(user_id)
+        except Exception:
+            log.exception("chat_facts_load_failed", user_id=user_id)
+            return []
+
+        # Only use semantic search if there are enough facts to warrant filtering
+        if len(all_facts) > 5:
+            try:
+                return await self.memory.search_facts_semantic(user_id, query, limit=10)
+            except Exception:
+                log.exception("chat_facts_semantic_failed", user_id=user_id)
+                return all_facts
+
+        return all_facts
 
     def _spawn_task(self, coro) -> None:
         """Create a background task with automatic cleanup."""
