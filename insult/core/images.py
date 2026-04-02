@@ -89,7 +89,7 @@ async def generate_image(
             headers["Authorization"] = f"Bearer {api_key}"
         async with (
             aiohttp.ClientSession(timeout=timeout) as session,
-            session.get(url, params=params, headers=headers) as resp,
+            session.get(url, params=params, headers=headers, allow_redirects=False) as resp,
         ):
             if resp.status != 200:
                 log.error(
