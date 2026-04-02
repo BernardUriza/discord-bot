@@ -92,7 +92,7 @@ async def generate_image(
             session.get(url, params=params, headers=headers) as resp,
         ):
             if resp.status != 200:
-                log.error("image_fetch_failed", status=resp.status, prompt=clean_prompt[:80])
+                log.error("image_fetch_failed", status=resp.status, prompt=clean_prompt[:80], has_api_key=bool(api_key), url_base=POLLINATIONS_BASE)
                 return None
 
             data = await resp.read()
