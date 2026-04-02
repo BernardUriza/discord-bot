@@ -25,8 +25,8 @@ class TestParseReactions:
         assert parse_reactions("Algo[REACT:]") == []
 
     def test_max_reactions_enforced(self):
-        result = parse_reactions("[REACT:💀,🔥,😂,🫠,👀]")
-        assert len(result) == 3  # MAX_REACTIONS = 3
+        result = parse_reactions("[REACT:💀,🔥,😂,🫠,👀,🦷,🪬,🧿,🌀,🦴]")
+        assert len(result) == 8  # MAX_REACTIONS = 8
 
     def test_react_only_no_text(self):
         assert parse_reactions("[REACT:👀]") == ["👀"]

@@ -17,7 +17,7 @@ log = structlog.get_logger()
 
 # [REACT:💀,🔥] parsed from LLM response
 REACTION_PATTERN = re.compile(r"\[REACT:([^\]]*)\]", re.IGNORECASE)
-MAX_REACTIONS = 3
+MAX_REACTIONS = 8
 REACTION_DELAY_MIN = 0.5  # seconds before first reaction (human-like pause)
 REACTION_DELAY_MAX = 2.0
 REACTION_INTERVAL = 0.35  # seconds between multiple reactions (rate limit safety)
