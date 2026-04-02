@@ -11,6 +11,7 @@ from insult.cogs import ChatCog, UtilityCog
 from insult.cogs.voice import VoiceCog
 from insult.core.backup import download_db, is_azure_configured, upload_db
 from insult.core.character import _get_current_time_context, strip_metadata
+from insult.core.delivery import MESSAGE_DELIMITER, split_response
 from insult.core.errors import get_error_response
 from insult.core.proactive import generate_proactive_message, should_send_now
 
@@ -105,13 +106,17 @@ def _build(container: Container):
         if msg:
             msg = strip_metadata(msg)
             try:
-                parts = [p.strip() for p in msg.split("[SEND]") if p.strip()]
+                parts = split_response(msg)
                 for part in parts:
                     await target_channel.send(part)
                 _last_proactive_ts = dt.now().timestamp()
                 # Store in memory
                 await memory.store(
-                    str(target_channel.id), str(bot.user.id), bot.user.name, "assistant", msg.replace("[SEND]", "\n")
+                    str(target_channel.id),
+                    str(bot.user.id),
+                    bot.user.name,
+                    "assistant",
+                    msg.replace(MESSAGE_DELIMITER, "\n"),
                 )
                 log.info("proactive_message_sent", channel=target_channel.name, length=len(msg))
             except Exception:

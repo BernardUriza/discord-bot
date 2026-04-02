@@ -4,8 +4,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from insult.cogs.chat import ChatCog, parse_reactions, strip_reactions
+from insult.cogs.chat import ChatCog
 from insult.core.llm import LLMResponse
+from insult.core.reactions import add_reactions, parse_reactions, strip_reactions
 
 # --- parse_reactions ---
 
@@ -75,14 +76,10 @@ class TestStripReactions:
         assert "REACT" not in result
 
 
-# --- _add_reactions (integration with ChatCog) ---
+# --- add_reactions (standalone async function) ---
 
 
 class TestAddReactions:
-    @pytest.fixture
-    def cog(self, mock_container):
-        return ChatCog(mock_container)
-
     @pytest.fixture
     def mock_message(self):
         msg = MagicMock()
@@ -90,31 +87,31 @@ class TestAddReactions:
         msg.add_reaction = AsyncMock()
         return msg
 
-    @patch("insult.cogs.chat.asyncio.sleep", new_callable=AsyncMock)
-    async def test_adds_single_reaction(self, mock_sleep, cog, mock_message):
-        await cog._add_reactions(mock_message, ["💀"])
+    @patch("insult.core.reactions.asyncio.sleep", new_callable=AsyncMock)
+    async def test_adds_single_reaction(self, mock_sleep, mock_message):
+        await add_reactions(mock_message, ["💀"])
         mock_message.add_reaction.assert_called_once_with("💀")
 
-    @patch("insult.cogs.chat.asyncio.sleep", new_callable=AsyncMock)
-    async def test_adds_multiple_reactions(self, mock_sleep, cog, mock_message):
-        await cog._add_reactions(mock_message, ["💀", "🔥"])
+    @patch("insult.core.reactions.asyncio.sleep", new_callable=AsyncMock)
+    async def test_adds_multiple_reactions(self, mock_sleep, mock_message):
+        await add_reactions(mock_message, ["💀", "🔥"])
         assert mock_message.add_reaction.call_count == 2
         mock_message.add_reaction.assert_any_call("💀")
         mock_message.add_reaction.assert_any_call("🔥")
 
-    @patch("insult.cogs.chat.asyncio.sleep", new_callable=AsyncMock)
-    async def test_stops_on_http_error(self, mock_sleep, cog, mock_message):
+    @patch("insult.core.reactions.asyncio.sleep", new_callable=AsyncMock)
+    async def test_stops_on_http_error(self, mock_sleep, mock_message):
         import discord
 
         mock_message.add_reaction = AsyncMock(side_effect=discord.HTTPException(MagicMock(status=400), "Bad emoji"))
         # Should not raise — error is caught internally
-        await cog._add_reactions(mock_message, ["invalid", "💀"])
+        await add_reactions(mock_message, ["invalid", "💀"])
         # Stops after first failure, doesn't try second
         assert mock_message.add_reaction.call_count == 1
 
-    @patch("insult.cogs.chat.asyncio.sleep", new_callable=AsyncMock)
-    async def test_has_initial_delay(self, mock_sleep, cog, mock_message):
-        await cog._add_reactions(mock_message, ["💀"])
+    @patch("insult.core.reactions.asyncio.sleep", new_callable=AsyncMock)
+    async def test_has_initial_delay(self, mock_sleep, mock_message):
+        await add_reactions(mock_message, ["💀"])
         # First sleep call is the initial human-like delay
         first_sleep = mock_sleep.call_args_list[0]
         delay = first_sleep[0][0]

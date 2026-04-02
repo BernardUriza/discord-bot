@@ -101,6 +101,15 @@ class TestDetectAntiPatterns:
     def test_no_false_positive_on_insult_style(self):
         assert detect_anti_patterns("Y eso lo dices porque lo pensaste o porque lo leiste?") == []
 
+    def test_detects_preachy_monologue(self):
+        assert len(detect_anti_patterns("We must dismantle the systems of oppression.")) > 0
+
+    def test_detects_over_validation(self):
+        assert len(detect_anti_patterns("Totalmente de acuerdo con lo que dices.")) > 0
+
+    def test_detects_moralizing_without_tension(self):
+        assert len(detect_anti_patterns("Es importante reconocer que todos somos diferentes.")) > 0
+
 
 # --- Build Adaptive Prompt ---
 
@@ -199,3 +208,10 @@ class TestBuildAdaptivePrompt:
             self.BASE_PROMPT, None, 5, current_message="mi codigo tiene un bug, que opinas de esta arquitectura?"
         )
         assert preset.mode == PresetMode.INTELLECTUAL_PRESSURE
+
+    def test_arc_on_system_critique(self):
+        prompt, preset = build_adaptive_prompt(
+            self.BASE_PROMPT, None, 5, current_message="el capitalismo es explotacion pura"
+        )
+        assert preset.mode == PresetMode.ARC
+        assert "ARC" in prompt

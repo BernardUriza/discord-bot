@@ -94,6 +94,40 @@ class TestClassifyPreset:
         result = classify_preset("ese meme esta buenisimo lol")
         assert result.mode == PresetMode.PLAYFUL_ROAST
 
+    # --- ARC (Adaptive Relational Critique) ---
+
+    def test_capitalism_triggers_arc(self):
+        result = classify_preset("el capitalismo es explotacion pura")
+        assert result.mode == PresetMode.ARC
+
+    def test_speciesism_triggers_arc(self):
+        result = classify_preset("el especismo esta normalizado en nuestra cultura")
+        assert result.mode == PresetMode.ARC
+
+    def test_racism_triggers_arc(self):
+        result = classify_preset("el racismo sistemico afecta todo")
+        assert result.mode == PresetMode.ARC
+
+    def test_homophobia_triggers_arc(self):
+        result = classify_preset("la homofobia sigue siendo un problema serio")
+        assert result.mode == PresetMode.ARC
+
+    def test_ethics_question_triggers_arc(self):
+        result = classify_preset("es etico tener animales en zoologicos?")
+        assert result.mode == PresetMode.ARC
+
+    def test_privilege_triggers_arc(self):
+        result = classify_preset("el privilegio es invisible para quien lo tiene")
+        assert result.mode == PresetMode.ARC
+
+    def test_arc_from_context(self):
+        recent = [
+            {"role": "user", "content": "la desigualdad es un problema"},
+            {"role": "assistant", "content": "y que propones"},
+        ]
+        result = classify_preset("pues hay que hablar de privilegio", recent_messages=recent)
+        assert result.mode == PresetMode.ARC
+
     # --- DEFAULT_ABRASIVE (fallback) ---
 
     def test_generic_message_defaults_to_abrasive(self):
@@ -166,6 +200,15 @@ class TestClassifyPreset:
         result = classify_preset("mi codigo tiene un bug y tengo depresion")
         assert result.mode == PresetMode.RESPECTFUL_SERIOUS
 
+    def test_serious_beats_arc(self):
+        result = classify_preset("el racismo me tiene deprimido, me quiero morir")
+        assert result.mode == PresetMode.RESPECTFUL_SERIOUS
+
+    def test_arc_beats_intellectual(self):
+        # ARC topic (capitalism) + intellectual (opinion request)
+        result = classify_preset("que opinas de la explotacion capitalista?")
+        assert result.mode == PresetMode.ARC
+
     # --- CONFIDENCE ---
 
     def test_default_has_baseline_confidence(self):
@@ -201,3 +244,9 @@ class TestBuildPresetPrompt:
         selection = classify_preset("eres un AI?")
         prompt = build_preset_prompt(selection)
         assert "Meta Deflection" in prompt
+
+    def test_arc_mode_prompt(self):
+        selection = classify_preset("el capitalismo es explotacion pura")
+        prompt = build_preset_prompt(selection)
+        assert "ARC" in prompt
+        assert "domination" in prompt.lower() or "personhood" in prompt.lower()

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import random
-import re
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -16,9 +14,11 @@ from discord.ext import commands
 from insult.core.actions import CHANNEL_TOOLS, execute_create_channel
 from insult.core.attachments import process_attachments
 from insult.core.character import build_adaptive_prompt
+from insult.core.delivery import MESSAGE_DELIMITER, send_response
 from insult.core.errors import classify_error, get_error_response
 from insult.core.facts import build_facts_prompt, extract_facts
 from insult.core.presets import PresetModifier
+from insult.core.reactions import add_reactions, parse_reactions, strip_reactions
 
 if TYPE_CHECKING:
     from insult.app import Container
@@ -28,18 +28,6 @@ log = structlog.get_logger()
 MAX_MESSAGE_LENGTH = 4000
 BATCH_WAIT_SECONDS = 3.0  # Wait this long after last message before responding
 MIN_RESPONSE_GAP = 5.0  # Minimum seconds between bot responses to same user (token protection)
-MESSAGE_DELIMITER = "[SEND]"
-TYPING_CHARS_PER_SECOND = 50  # ~250 CPM, fast mobile typing speed
-MIN_TYPING_DELAY = 0.8
-MAX_TYPING_DELAY = 5.0
-VERSION_TAG = "ᵇᵉᵗᵃ ᵛ⁰·⁸·⁰"  # superscript unicode — visible but unobtrusive
-
-# Reaction system — [REACT:💀,🔥] parsed from LLM response
-REACTION_PATTERN = re.compile(r"\[REACT:([^\]]*)\]", re.IGNORECASE)
-MAX_REACTIONS = 3
-REACTION_DELAY_MIN = 0.5  # seconds before first reaction (human-like pause)
-REACTION_DELAY_MAX = 2.0
-REACTION_INTERVAL = 0.35  # seconds between multiple reactions (rate limit safety)
 
 
 @dataclass
@@ -158,7 +146,6 @@ class ChatCog(commands.Cog):
 
     async def _respond(self, message: discord.Message, text: str):
         """Core response logic — shared by on_message and !chat command."""
-        # Record response time for token protection
         self._last_response_time[message.author.id] = time.monotonic()
 
         channel_id = str(message.channel.id)
@@ -184,29 +171,13 @@ class ChatCog(commands.Cog):
             log.exception("chat_profile_update_failed", user_id=user_id)
             profile = None
 
-        try:
-            # Full channel context (all users) so the bot sees the whole conversation flow.
-            # Style adaptation is per-user (via profile), but context must be shared.
-            recent = await self.memory.get_recent(channel_id, self.settings.memory_recent_limit)
-            relevant = await self.memory.search(channel_id, text, self.settings.memory_relevant_limit)
-            context = self.memory.build_context(recent, relevant)
-        except Exception:
-            log.exception("chat_context_failed", channel_id=channel_id)
+        context, recent = await self._build_context(channel_id, text, attachment_blocks)
+        if context is None:
             await message.channel.send(get_error_response("context_failed"))
             return
 
-        if attachment_blocks and context:
-            last_msg = context[-1]
-            if last_msg["role"] == "user":
-                text_block = {"type": "text", "text": last_msg["content"]}
-                context[-1] = {"role": "user", "content": [text_block, *attachment_blocks]}
-
-        # Load user facts for injection into prompt
-        user_facts = []
-        try:
-            user_facts = await self.memory.get_facts(user_id)
-        except Exception:
-            log.exception("chat_facts_load_failed", user_id=user_id)
+        # Load user facts and build prompt
+        user_facts = await self._load_facts(user_id)
 
         system_prompt, preset = build_adaptive_prompt(
             self.settings.system_prompt,
@@ -231,7 +202,6 @@ class ChatCog(commands.Cog):
             )
 
         # If user wants a server action, force tool_choice="any" so Claude MUST use the tool.
-        # With "any", Claude won't emit text — we generate confirmation ourselves.
         force_tool = PresetModifier.ACTION_INTENT in preset.modifiers
         tool_choice = {"type": "any"} if force_tool else None
 
@@ -245,11 +215,11 @@ class ChatCog(commands.Cog):
 
         response = llm_response.text
 
-        # Extract emoji reactions from text (cosmetic — text markers are fine for this)
+        # Extract and strip emoji reactions
         reactions = parse_reactions(response)
         response = strip_reactions(response)
 
-        # Store the full response (without delimiters) in memory
+        # Store the full response in memory
         clean_response = response.replace(MESSAGE_DELIMITER, "\n")
         try:
             await self.memory.store(
@@ -258,39 +228,52 @@ class ChatCog(commands.Cog):
         except Exception:
             log.exception("chat_store_response_failed", channel_id=channel_id)
 
-        # Fire emoji reactions in background (on the USER's message, with human-like delay)
+        # Fire background tasks: reactions, tool calls, fact extraction
         if reactions:
-            task = asyncio.create_task(self._add_reactions(message, reactions))
-            self._background_tasks.add(task)
-            task.add_done_callback(self._background_tasks.discard)
-
-        # Execute tool_use actions in background (channel creation, etc.)
+            self._spawn_task(add_reactions(message, reactions))
         if llm_response.tool_calls and message.guild:
-            task = asyncio.create_task(self._execute_tool_calls(message, llm_response.tool_calls))
-            self._background_tasks.add(task)
-            task.add_done_callback(self._background_tasks.discard)
+            self._spawn_task(self._execute_tool_calls(message, llm_response.tool_calls))
 
-        # Send as multiple messages with typing delay if LLM used [SEND] delimiter
-        parts = [p.strip() for p in response.split(MESSAGE_DELIMITER) if p.strip()]
-        if not parts:
-            parts = [] if (reactions or llm_response.tool_calls) else [response.strip() or "..."]
-        for i, part in enumerate(parts):
-            # Append version tag to the very last chunk of the last part
-            is_last_part = i == len(parts) - 1
-            chunks = [part[j : j + 1990] for j in range(0, len(part), 1990)]
-            for ci, chunk in enumerate(chunks):
-                if is_last_part and ci == len(chunks) - 1:
-                    chunk += f"\n-# {VERSION_TAG}"
-                await message.channel.send(chunk)
-            # Typing delay between parts (not after the last one)
-            if not is_last_part:
-                next_part = parts[i + 1]
-                delay = max(MIN_TYPING_DELAY, min(len(next_part) / TYPING_CHARS_PER_SECOND, MAX_TYPING_DELAY))
-                async with message.channel.typing():
-                    await asyncio.sleep(delay)
+        # Send response with [SEND] splitting, chunking, and typing delays
+        has_side_effects = bool(reactions or llm_response.tool_calls)
+        await send_response(message.channel, response, has_side_effects=has_side_effects)
 
-        # Async fact extraction — runs in background, doesn't block response
-        task = asyncio.create_task(self._extract_user_facts(user_id, user_name, user_facts, recent))
+        # Background fact extraction
+        self._spawn_task(self._extract_user_facts(user_id, user_name, user_facts, recent))
+
+    # --- Private helpers ---
+
+    async def _build_context(
+        self, channel_id: str, text: str, attachment_blocks: list
+    ) -> tuple[list[dict], list[dict]] | tuple[None, list]:
+        """Build conversation context from memory. Returns (context, recent) or (None, []) on failure."""
+        try:
+            recent = await self.memory.get_recent(channel_id, self.settings.memory_recent_limit)
+            relevant = await self.memory.search(channel_id, text, self.settings.memory_relevant_limit)
+            context = self.memory.build_context(recent, relevant)
+        except Exception:
+            log.exception("chat_context_failed", channel_id=channel_id)
+            return None, []
+
+        if attachment_blocks and context:
+            last_msg = context[-1]
+            if last_msg["role"] == "user":
+                text_block = {"type": "text", "text": last_msg["content"]}
+                context[-1] = {"role": "user", "content": [text_block, *attachment_blocks]}
+
+        return context, recent
+
+    async def _load_facts(self, user_id: str) -> list[dict]:
+        """Load user facts, returning empty list on failure."""
+        try:
+            return await self.memory.get_facts(user_id)
+        except Exception:
+            log.exception("chat_facts_load_failed", user_id=user_id)
+            return []
+
+    def _spawn_task(self, coro) -> None:
+        """Create a background task with automatic cleanup."""
+        task = asyncio.create_task(coro)
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 
@@ -309,25 +292,6 @@ class ChatCog(commands.Cog):
             else:
                 log.warning("tool_call_unknown", tool=tool_call.name)
 
-    async def _add_reactions(self, message: discord.Message, emojis: list[str]):
-        """Background task: add emoji reactions to the user's message with human-like delay."""
-        try:
-            # Initial delay — humans don't react instantly
-            await asyncio.sleep(random.uniform(REACTION_DELAY_MIN, REACTION_DELAY_MAX))
-
-            for i, emoji in enumerate(emojis):
-                try:
-                    await message.add_reaction(emoji)
-                    log.info("reaction_added", emoji=emoji, message_id=message.id)
-                except (discord.HTTPException, discord.NotFound) as e:
-                    log.warning("reaction_failed", emoji=emoji, error=str(e))
-                    break  # Don't try remaining if one fails
-                # Small delay between multiple reactions (rate limit safety)
-                if i < len(emojis) - 1:
-                    await asyncio.sleep(REACTION_INTERVAL)
-        except Exception:
-            log.exception("reaction_task_failed", message_id=message.id)
-
     async def _extract_user_facts(self, user_id: str, user_name: str, existing_facts: list[dict], recent: list[dict]):
         """Background task: extract user facts from recent conversation."""
         try:
@@ -336,27 +300,3 @@ class ChatCog(commands.Cog):
                 await self.memory.save_facts(user_id, new_facts)
         except Exception:
             log.exception("facts_extraction_background_failed", user_id=user_id)
-
-
-def parse_reactions(response: str) -> list[str]:
-    """Extract emoji reactions from LLM response.
-
-    Parses [REACT:emoji1,emoji2] markers and returns a list of emoji strings.
-    Returns at most MAX_REACTIONS emojis. Returns empty list if no marker found.
-    """
-    match = REACTION_PATTERN.search(response)
-    if not match:
-        return []
-
-    raw = match.group(1).strip()
-    if not raw:
-        return []
-
-    # Split by comma, strip whitespace, filter empty
-    emojis = [e.strip() for e in raw.split(",") if e.strip()]
-    return emojis[:MAX_REACTIONS]
-
-
-def strip_reactions(response: str) -> str:
-    """Remove [REACT:...] markers from the response text."""
-    return REACTION_PATTERN.sub("", response).strip()

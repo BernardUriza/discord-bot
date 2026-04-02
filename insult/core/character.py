@@ -85,6 +85,15 @@ ANTI_PATTERN_CHECKS = [
     re.compile(r"(?i)^(#{1,3} )", re.MULTILINE),  # markdown headers
     re.compile(r"(?m)^[\-\*] .+\n[\-\*] .+"),  # two+ consecutive bullet points
     re.compile(r"(?i)\b(claro que (se puede|sí|si)|por supuesto que sí)\b"),
+    # Preachy activist monologues — slogans as complete thoughts
+    re.compile(r"(?i)\b(we (must|need to) (dismantle|fight|resist|stand against))\b"),
+    re.compile(r"(?i)\b(debemos (luchar|resistir|combatir|desmantelar))\b"),
+    # Over-validation / excessive agreement
+    re.compile(r"(?i)\b(absolutamente|absolutely)[.!]\s*(tienes|you'?re)\s*(razon|right)\b"),
+    re.compile(r"(?i)\b(totalmente de acuerdo|couldn'?t agree more)\b"),
+    # Moralizing without tension — lecturing instead of challenging
+    re.compile(r"(?i)\bit'?s important (to|that) (recognize|acknowledge|understand|remember)\b"),
+    re.compile(r"(?i)\bes importante (reconocer|entender|recordar|tener en cuenta)\b"),
 ]
 
 
