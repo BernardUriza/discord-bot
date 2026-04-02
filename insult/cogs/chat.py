@@ -261,17 +261,23 @@ class ChatCog(commands.Cog):
 
         # Execute media generation BEFORE text (visual/sonic punctuation leads, text follows)
         # Other tool calls (channels) run in background as before
+        media_sent = False
         if llm_response.tool_calls:
             media_names = {"generate_image", "play_audio"}
             media_calls = [tc for tc in llm_response.tool_calls if tc.name in media_names]
             other_calls = [tc for tc in llm_response.tool_calls if tc.name not in media_names]
             for mc in media_calls[:1]:  # Max 1 media per response
                 if mc.name == "generate_image":
-                    await self._execute_image_call(message, mc)
+                    media_sent = await self._execute_image_call(message, mc)
                 elif mc.name == "play_audio":
-                    await self._execute_audio_call(message, mc)
+                    media_sent = await self._execute_audio_call(message, mc)
             if other_calls and message.guild:
                 self._spawn_task(self._execute_tool_calls(message, other_calls))
+
+        # Fallback: if LLM produced no text AND media failed AND no reactions, send in-character error
+        # (reaction-only responses are valid — emoji on user's message with no text)
+        if not response.strip() and not media_sent and not reactions:
+            response = get_error_response("generic")
 
         # Send text response with [SEND] splitting, chunking, and typing delays
         has_side_effects = bool(reactions or llm_response.tool_calls)
@@ -319,8 +325,8 @@ class ChatCog(commands.Cog):
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 
-    async def _execute_image_call(self, message: discord.Message, tool_call):
-        """Send a Pollinations-generated image BEFORE the text response."""
+    async def _execute_image_call(self, message: discord.Message, tool_call) -> bool:
+        """Send a Pollinations-generated image BEFORE the text response. Returns True if sent."""
         from insult.core.images import generate_image
 
         prompt = tool_call.input.get("prompt", "")
@@ -332,13 +338,15 @@ class ChatCog(commands.Cog):
             image_data = await generate_image(prompt, model=model, width=width, height=height)
             if image_data:
                 await message.channel.send(file=discord.File(image_data, "insult.png"))
-            else:
-                log.warning("image_generation_returned_none", prompt=prompt[:80])
+                return True
+            log.warning("image_generation_returned_none", prompt=prompt[:80])
+            return False
         except Exception:
             log.exception("image_generation_failed", prompt=prompt[:80])
+            return False
 
-    async def _execute_audio_call(self, message: discord.Message, tool_call):
-        """Send a YouTube/Freesound audio clip BEFORE the text response."""
+    async def _execute_audio_call(self, message: discord.Message, tool_call) -> bool:
+        """Send a YouTube/Freesound audio clip BEFORE the text response. Returns True if sent."""
         from insult.core.audio import search_and_clip_youtube, search_freesound
 
         query = tool_call.input.get("query", "")
@@ -353,10 +361,12 @@ class ChatCog(commands.Cog):
 
             if audio_data:
                 await message.channel.send(file=discord.File(audio_data, "insult-audio.mp3"))
-            else:
-                log.warning("audio_generation_returned_none", query=query[:80], source=source)
+                return True
+            log.warning("audio_generation_returned_none", query=query[:80], source=source)
+            return False
         except Exception:
             log.exception("audio_generation_failed", query=query[:80])
+            return False
 
     async def _execute_tool_calls(self, message: discord.Message, tool_calls: list):
         """Background task: execute tool_use calls from Claude (channel creation, etc.)."""
