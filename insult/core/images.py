@@ -17,7 +17,7 @@ log = structlog.get_logger()
 # Constants
 # ---------------------------------------------------------------------------
 
-POLLINATIONS_BASE = "https://gen.pollinations.ai/image"
+POLLINATIONS_BASE = "https://image.pollinations.ai/prompt"
 DEFAULT_MODEL = "flux"
 DEFAULT_WIDTH = 1024
 DEFAULT_HEIGHT = 1024
@@ -81,23 +81,20 @@ async def generate_image(
     }
     if seed is not None:
         params["seed"] = str(seed)
+    if api_key:
+        params["key"] = api_key
 
     try:
         timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
-        headers = {}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
         async with (
             aiohttp.ClientSession(timeout=timeout) as session,
-            session.get(url, params=params, headers=headers, allow_redirects=False) as resp,
+            session.get(url, params=params) as resp,
         ):
             if resp.status != 200:
                 log.error(
                     "image_fetch_failed",
                     status=resp.status,
                     prompt=clean_prompt[:80],
-                    has_api_key=bool(api_key),
-                    url_base=POLLINATIONS_BASE,
                 )
                 return None
 
