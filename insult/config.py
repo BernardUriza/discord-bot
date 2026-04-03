@@ -42,9 +42,6 @@ class Settings(BaseSettings):
     azure_openai_tts_deployment: str = "tts"
     tts_voice: str = "onyx"  # alloy, echo, fable, onyx, nova, shimmer
 
-    # Pollinations.ai (image generation)
-    pollinations_api_key: str = ""
-
     # Freesound (optional — for meme sound effects)
     freesound_api_key: str = ""
 

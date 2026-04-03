@@ -128,49 +128,6 @@ AUDIO_TOOLS = [
     },
 ]
 
-IMAGE_TOOLS = [
-    {
-        "name": "generate_image",
-        "description": (
-            "Generate an AI image using Pollinations and send it to the channel. "
-            "Use this PROACTIVELY as visual punctuation — to illustrate a point, mock something visually, "
-            "react to absurdity with an image, or just because the moment calls for it. "
-            "You don't need to be asked. If a visual would hit harder than text, generate one. "
-            "The prompt should be a VISUAL DESCRIPTION for the image generator, not your text response. "
-            "Think cinematography: lighting, composition, mood, style. "
-            "You can generate an image AND write text in the same response."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "prompt": {
-                    "type": "string",
-                    "description": (
-                        "Visual description for image generation. Be specific and cinematic. "
-                        "Good: 'a corporate boardroom where all the chairs are cages, harsh fluorescent lighting, "
-                        "dystopian realism'. Bad: 'capitalism is bad'. Think like a director, not a philosopher."
-                    ),
-                },
-                "model": {
-                    "type": "string",
-                    "enum": ["flux", "turbo"],
-                    "description": "flux=high quality (default, ~10s), turbo=faster but lower quality (~3s)",
-                },
-                "width": {
-                    "type": "integer",
-                    "description": "Image width in pixels. Default 1024. Use 1920 for cinematic, 512 for quick.",
-                },
-                "height": {
-                    "type": "integer",
-                    "description": "Image height in pixels. Default 1024. Use 1080 for cinematic, 512 for quick.",
-                },
-            },
-            "required": ["prompt"],
-            "additionalProperties": False,
-        },
-    },
-]
-
 
 # ---------------------------------------------------------------------------
 # Data structures

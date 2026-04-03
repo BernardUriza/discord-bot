@@ -14,7 +14,6 @@ from discord.ext import commands
 from insult.core.actions import (
     AUDIO_TOOLS,
     CHANNEL_TOOLS,
-    IMAGE_TOOLS,
     execute_create_channel,
     execute_edit_channel,
     execute_get_channel_info,
@@ -37,7 +36,7 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 # Static tool list — built once, reused every message
-_ALL_TOOLS = list(CHANNEL_TOOLS) + list(IMAGE_TOOLS) + list(AUDIO_TOOLS) + list(REMINDER_TOOLS)
+_ALL_TOOLS = list(CHANNEL_TOOLS) + list(AUDIO_TOOLS) + list(REMINDER_TOOLS)
 
 MAX_MESSAGE_LENGTH = 4000
 BATCH_WAIT_SECONDS = 3.0  # Wait this long after last message before responding
@@ -300,20 +299,17 @@ class ChatCog(commands.Cog):
         if reactions:
             self._spawn_task(add_reactions(message, reactions))
 
-        # Execute tool calls — media runs in background (never blocks text delivery)
+        # Execute tool calls — media/reminders run in background
         if llm_response.tool_calls:
-            media_names = {"generate_image", "play_audio"}
+            audio_names = {"play_audio"}
             reminder_names = {"create_reminder", "list_reminders", "cancel_reminder"}
-            media_calls = [tc for tc in llm_response.tool_calls if tc.name in media_names]
+            audio_calls = [tc for tc in llm_response.tool_calls if tc.name in audio_names]
             reminder_calls = [tc for tc in llm_response.tool_calls if tc.name in reminder_names]
             other_calls = [
-                tc for tc in llm_response.tool_calls if tc.name not in media_names and tc.name not in reminder_names
+                tc for tc in llm_response.tool_calls if tc.name not in audio_names and tc.name not in reminder_names
             ]
-            for mc in media_calls[:1]:  # Max 1 media per response
-                if mc.name == "generate_image":
-                    self._spawn_task(self._execute_image_call(message, mc))
-                elif mc.name == "play_audio":
-                    self._spawn_task(self._execute_audio_call(message, mc))
+            for ac in audio_calls[:1]:  # Max 1 audio per response
+                self._spawn_task(self._execute_audio_call(message, ac))
             for rc in reminder_calls:
                 self._spawn_task(self._execute_reminder_call(message, rc))
             if other_calls and message.guild:
@@ -392,34 +388,6 @@ class ChatCog(commands.Cog):
         task = asyncio.create_task(coro)
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
-
-    async def _execute_image_call(self, message: discord.Message, tool_call) -> bool:
-        """Send a Pollinations-generated image as background task. Returns True if sent."""
-        from insult.core.images import generate_image
-
-        prompt = tool_call.input.get("prompt", "")
-        model = tool_call.input.get("model", "flux")
-        width = tool_call.input.get("width", 1024)
-        height = tool_call.input.get("height", 1024)
-
-        try:
-            image_data = await generate_image(
-                prompt,
-                model=model,
-                width=width,
-                height=height,
-                api_key=self.settings.pollinations_api_key,
-            )
-            if image_data:
-                await message.channel.send(file=discord.File(image_data, "insult.png"))
-                return True
-            log.warning("image_generation_returned_none", prompt=prompt[:80])
-            await message.channel.send("No pude generar la imagen. Ni modo.")
-            return False
-        except Exception:
-            log.exception("image_generation_failed", prompt=prompt[:80])
-            await message.channel.send("Se trabó la generación de imagen. Luego le intento.")
-            return False
 
     async def _execute_audio_call(self, message: discord.Message, tool_call) -> bool:
         """Send a YouTube/Freesound audio clip BEFORE the text response. Returns True if sent."""

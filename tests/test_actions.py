@@ -6,7 +6,6 @@ import pytest
 
 from insult.core.actions import (
     CHANNEL_TOOLS,
-    IMAGE_TOOLS,
     ToolCall,
     execute_create_channel,
     execute_edit_channel,
@@ -46,39 +45,13 @@ class TestChannelTools:
         assert schema["required"] == []
 
 
-class TestImageTools:
-    def test_tool_exists(self):
-        assert len(IMAGE_TOOLS) == 1
-        assert IMAGE_TOOLS[0]["name"] == "generate_image"
-
-    def test_prompt_required(self):
-        schema = IMAGE_TOOLS[0]["input_schema"]
-        assert "prompt" in schema["properties"]
-        assert schema["required"] == ["prompt"]
-
-    def test_optional_params(self):
-        schema = IMAGE_TOOLS[0]["input_schema"]
-        assert "model" in schema["properties"]
-        assert "width" in schema["properties"]
-        assert "height" in schema["properties"]
-        assert set(schema["properties"]["model"]["enum"]) == {"flux", "turbo"}
-
-    def test_conforms_to_anthropic_schema(self):
-        for tool in IMAGE_TOOLS:
-            assert "name" in tool
-            assert "input_schema" in tool
-            schema = tool["input_schema"]
-            assert schema["type"] == "object"
-            assert "strict" not in tool
-
-
 class TestAllToolsConformance:
     """Validate ALL tool definitions conform to Anthropic API requirements."""
 
     def test_all_tools_have_required_fields(self):
         from insult.core.actions import AUDIO_TOOLS
 
-        all_tools = list(CHANNEL_TOOLS) + list(IMAGE_TOOLS) + list(AUDIO_TOOLS)
+        all_tools = list(CHANNEL_TOOLS) + list(AUDIO_TOOLS)
         for tool in all_tools:
             assert "name" in tool, "Tool must have 'name'"
             assert "input_schema" in tool, "Tool must have 'input_schema'"
