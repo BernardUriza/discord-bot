@@ -13,9 +13,6 @@ azure-storage-blob>=12.19.0
 # Voice (TTS via Azure OpenAI — sent as MP3 attachment)
 openai>=1.30.0
 
-# Audio clips (YouTube search + download for sonic punctuation)
-yt-dlp>=2025.1.0
-
 # Vector search (semantic fact retrieval)
 sqlite-vec>=0.1.6
 sentence-transformers>=3.0.0

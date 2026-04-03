@@ -42,9 +42,6 @@ class Settings(BaseSettings):
     azure_openai_tts_deployment: str = "tts"
     tts_voice: str = "onyx"  # alloy, echo, fable, onyx, nova, shimmer
 
-    # Freesound (optional — for meme sound effects)
-    freesound_api_key: str = ""
-
     # Channel summaries (cross-channel awareness)
     summary_model: str = "claude-haiku-4-5-20251001"
     summary_interval_minutes: int = 15

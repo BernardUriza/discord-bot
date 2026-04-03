@@ -47,7 +47,6 @@ ruff check . && ruff format --check . && pytest -v --cov --cov-fail-under=80 && 
 
 **Channel tools** (core/actions.py): 3 tools via Claude tool_use: `create_channel` (private/topic/category), `get_channel_info` (read name+topic of current channel), `edit_channel` (change name and/or topic). All executed in background via `_execute_tool_calls`. ACTION_INTENT modifier in presets forces `tool_choice="any"`.
 
-**Audio clips** (core/audio.py): YouTube search via yt-dlp + Freesound API for memes. `play_audio` tool lets Claude proactively drop 15s audio clips as "sonic punctuation". Uses subprocess for yt-dlp + ffmpeg (non-blocking). Internal throttle: 30s cooldown. Requires `yt-dlp` + `ffmpeg` system dependencies.
 
 **4-Flow behavioral analysis** (core/flows.py): Pre-generation pipeline that runs AFTER preset selection, BEFORE LLM call. 4 flows: Epistemic Control (detects claims, contradictions, fluff → recommends epistemic moves), Adaptive Pressure (classifies user state → pressure level 1-5), Dynamic Expression (selects response shape + style flavor with anti-repetition tracking), Conversational Awareness (detects loops, deflection, performative arguing). Output injected as Layer 3.5 in system prompt. Post-generation validator checks adherence. 5 structured telemetry events per message: `flow_epistemic`, `flow_pressure`, `flow_expression`, `flow_awareness`, `flow_adherence_violation`.
 

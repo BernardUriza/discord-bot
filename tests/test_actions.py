@@ -49,9 +49,7 @@ class TestAllToolsConformance:
     """Validate ALL tool definitions conform to Anthropic API requirements."""
 
     def test_all_tools_have_required_fields(self):
-        from insult.core.actions import AUDIO_TOOLS
-
-        all_tools = list(CHANNEL_TOOLS) + list(AUDIO_TOOLS)
+        all_tools = list(CHANNEL_TOOLS)
         for tool in all_tools:
             assert "name" in tool, "Tool must have 'name'"
             assert "input_schema" in tool, "Tool must have 'input_schema'"

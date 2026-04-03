@@ -93,41 +93,6 @@ CHANNEL_TOOLS = [
     },
 ]
 
-AUDIO_TOOLS = [
-    {
-        "name": "play_audio",
-        "description": (
-            "Search for a song or sound effect and send a 15-second audio clip to the channel. "
-            "Use this PROACTIVELY as sonic punctuation — drop music when the moment calls for it. "
-            "You're a futuristic robot that scores its own conversations with music and meme sounds. "
-            "Use for: current trending songs as karaoke-style reactions, meme sound effects, "
-            "dramatic music for dramatic moments, absurd sounds for absurd statements. "
-            "The query should be a YouTube search string or a sound effect description. "
-            "You can play audio AND write text in the same response."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": (
-                        "Search query for the audio clip. For music: song name, artist, or lyrics snippet. "
-                        "For memes: 'sad trombone', 'bruh sound effect', 'dramatic chipmunk'. "
-                        "For mood: 'epic orchestral tension', 'lo-fi chill beat', 'mariachi trumpets'."
-                    ),
-                },
-                "source": {
-                    "type": "string",
-                    "enum": ["youtube", "meme"],
-                    "description": "youtube=songs and music (default), meme=sound effects and meme sounds from Freesound",
-                },
-            },
-            "required": ["query"],
-            "additionalProperties": False,
-        },
-    },
-]
-
 
 # ---------------------------------------------------------------------------
 # Data structures

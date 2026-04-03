@@ -15,7 +15,6 @@
 - `insult/core/attachments.py` — Discord attachment processing (images, text, PDFs)
 - `insult/core/facts.py` — LLM-based fact extraction from conversations, prompt building
 - `insult/core/flows.py` — 4-flow behavioral analysis: Epistemic Control, Adaptive Pressure, Dynamic Expression, Conversational Awareness
-- `insult/core/audio.py` — YouTube/Freesound audio clips (yt-dlp + ffmpeg, 15s clips, sonic punctuation)
 - `insult/core/proactive.py` — Proactive messaging (periodic check-ins based on time/activity)
 - `persona.md` — System prompt for the Insult persona (root of project)
 - `tests/` — pytest suite (unit + cog tests with mocked DI container)

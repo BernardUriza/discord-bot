@@ -12,7 +12,6 @@ import structlog
 from discord.ext import commands
 
 from insult.core.actions import (
-    AUDIO_TOOLS,
     CHANNEL_TOOLS,
     execute_create_channel,
     execute_edit_channel,
@@ -36,7 +35,7 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 # Static tool list — built once, reused every message
-_ALL_TOOLS = list(CHANNEL_TOOLS) + list(AUDIO_TOOLS) + list(REMINDER_TOOLS)
+_ALL_TOOLS = list(CHANNEL_TOOLS) + list(REMINDER_TOOLS)
 
 MAX_MESSAGE_LENGTH = 4000
 BATCH_WAIT_SECONDS = 3.0  # Wait this long after last message before responding
@@ -299,17 +298,11 @@ class ChatCog(commands.Cog):
         if reactions:
             self._spawn_task(add_reactions(message, reactions))
 
-        # Execute tool calls — media/reminders run in background
+        # Execute tool calls — reminders and channels run in background
         if llm_response.tool_calls:
-            audio_names = {"play_audio"}
             reminder_names = {"create_reminder", "list_reminders", "cancel_reminder"}
-            audio_calls = [tc for tc in llm_response.tool_calls if tc.name in audio_names]
             reminder_calls = [tc for tc in llm_response.tool_calls if tc.name in reminder_names]
-            other_calls = [
-                tc for tc in llm_response.tool_calls if tc.name not in audio_names and tc.name not in reminder_names
-            ]
-            for ac in audio_calls[:1]:  # Max 1 audio per response
-                self._spawn_task(self._execute_audio_call(message, ac))
+            other_calls = [tc for tc in llm_response.tool_calls if tc.name not in reminder_names]
             for rc in reminder_calls:
                 self._spawn_task(self._execute_reminder_call(message, rc))
             if other_calls and message.guild:
@@ -388,29 +381,6 @@ class ChatCog(commands.Cog):
         task = asyncio.create_task(coro)
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
-
-    async def _execute_audio_call(self, message: discord.Message, tool_call) -> bool:
-        """Send a YouTube/Freesound audio clip BEFORE the text response. Returns True if sent."""
-        from insult.core.audio import search_and_clip_youtube, search_freesound
-
-        query = tool_call.input.get("query", "")
-        source = tool_call.input.get("source", "youtube")
-
-        try:
-            if source == "meme":
-                freesound_key = self.settings.freesound_api_key or None
-                audio_data = await search_freesound(query, api_key=freesound_key)
-            else:
-                audio_data = await search_and_clip_youtube(query)
-
-            if audio_data:
-                await message.channel.send(file=discord.File(audio_data, "insult-audio.mp3"))
-                return True
-            log.warning("audio_generation_returned_none", query=query[:80], source=source)
-            return False
-        except Exception:
-            log.exception("audio_generation_failed", query=query[:80])
-            return False
 
     async def _execute_reminder_call(self, message: discord.Message, tool_call) -> None:
         """Execute a reminder tool call (create, list, or cancel)."""
