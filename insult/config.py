@@ -36,10 +36,11 @@ class Settings(BaseSettings):
     memory_recent_limit: int = 50
     memory_relevant_limit: int = 5
 
-    # Azure OpenAI TTS (voice playback)
+    # Azure OpenAI (TTS + Whisper)
     azure_openai_endpoint: str = ""
     azure_openai_key: SecretStr = SecretStr("")
     azure_openai_tts_deployment: str = "tts"
+    azure_openai_whisper_deployment: str = "whisper"
     tts_voice: str = "onyx"  # alloy, echo, fable, onyx, nova, shimmer
 
     # Channel summaries (cross-channel awareness)

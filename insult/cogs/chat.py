@@ -90,8 +90,12 @@ class ChatCog(commands.Cog):
         if message.content.startswith(self.settings.command_prefix):
             return
 
-        # Ignore empty messages (e.g. only attachments with no text, stickers)
+        # Transcribe voice messages via Whisper
         text = message.content.strip()
+        if message.flags.voice and message.attachments:
+            text = await self._transcribe_voice(message) or ""
+
+        # Ignore empty messages (e.g. only attachments with no text, stickers)
         if not text and not message.attachments:
             return
 
@@ -375,6 +379,22 @@ class ChatCog(commands.Cog):
                 return all_facts
 
         return all_facts
+
+    async def _transcribe_voice(self, message: discord.Message) -> str | None:
+        """Transcribe a Discord voice message via Azure OpenAI Whisper."""
+        from insult.core.transcribe import transcribe_voice_message
+
+        try:
+            audio_data = await message.attachments[0].read()
+            return await transcribe_voice_message(
+                audio_data,
+                endpoint=self.settings.azure_openai_endpoint,
+                api_key=self.settings.azure_openai_key.get_secret_value(),
+                deployment=self.settings.azure_openai_whisper_deployment,
+            )
+        except Exception:
+            log.exception("voice_transcription_failed")
+            return None
 
     def _spawn_task(self, coro) -> None:
         """Create a background task with automatic cleanup."""
