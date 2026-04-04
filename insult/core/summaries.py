@@ -110,7 +110,12 @@ def build_server_pulse(
         return ""
 
     # Format the pulse
-    lines = ["## Server Pulse (what's happening in other channels)"]
+    lines = [
+        "## Server Pulse (what's happening in other channels)\n"
+        "This is BACKGROUND CONTEXT ONLY. Do NOT address people from other channels "
+        "in your current response. Do NOT confuse names or topics from other channels "
+        "with the person you're talking to right now."
+    ]
     char_count = len(lines[0])
 
     for s in top:
