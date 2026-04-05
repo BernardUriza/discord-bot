@@ -16,10 +16,15 @@ log = structlog.get_logger()
 CONTAINER_NAME = "insult-bot"
 METRICS_BLOB = "metrics.json"
 LOGS_BLOB = "logs.json"
+TRACES_BLOB = "traces.json"
 MAX_LOG_ENTRIES = 200  # Keep last 200 log events
+MAX_MESSAGE_TRACES = 30  # Keep last 30 message traces for carousel
 
 # Global ring buffer for log events
 _log_buffer: deque[dict] = deque(maxlen=MAX_LOG_ENTRIES)
+
+# Message traces — one per bot response with all reasoning data
+_message_traces: deque[dict] = deque(maxlen=MAX_MESSAGE_TRACES)
 
 # Global counters (reset on restart)
 _counters: dict[str, int] = {
@@ -78,6 +83,17 @@ def record_event(event: dict) -> None:
         _counters["facts_failed"] += 1
 
 
+def record_message_trace(trace: dict) -> None:
+    """Record a complete message trace for the dashboard carousel."""
+    trace["ts"] = time.time()
+    _message_traces.append(trace)
+
+
+def build_message_traces_snapshot() -> list[dict]:
+    """Return message traces as a list (most recent last)."""
+    return list(_message_traces)
+
+
 def build_metrics_snapshot(bot_latency_ms: int, guilds: int, db_stats: dict) -> dict:
     """Build the full metrics snapshot for the dashboard."""
     return {
@@ -123,6 +139,15 @@ async def upload_dashboard_data(bot_latency_ms: int, guilds: int, db_stats: dict
             logs_blob = container.get_blob_client(LOGS_BLOB)
             await logs_blob.upload_blob(
                 json.dumps(logs, default=str),
+                overwrite=True,
+                content_settings=_blob_content_settings(),
+            )
+
+            # Upload message traces
+            traces = build_message_traces_snapshot()
+            traces_blob = container.get_blob_client(TRACES_BLOB)
+            await traces_blob.upload_blob(
+                json.dumps(traces, default=str),
                 overwrite=True,
                 content_settings=_blob_content_settings(),
             )

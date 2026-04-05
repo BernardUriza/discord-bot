@@ -81,6 +81,7 @@ body {
   grid-template-areas:
     "s1 s2 s3 s4"
     "presets presets counters counters"
+    "traces traces traces traces"
     "logs logs logs logs";
   gap: 0.75rem;
   padding: 1rem 1.5rem;
@@ -184,6 +185,86 @@ body {
   font-weight: 600;
 }
 
+/* Carousel */
+.carousel-container {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.carousel-track {
+  display: flex;
+  gap: 0.5rem;
+  padding-bottom: 0.25rem;
+}
+
+.carousel-card {
+  flex: 0 0 280px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.carousel-card:hover { background: var(--surface-hover); }
+.carousel-card.selected { border-color: var(--red); background: rgba(231, 76, 60, 0.05); }
+
+.trace-user {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--blue);
+  margin-bottom: 0.25rem;
+}
+
+.trace-input {
+  font-size: 0.6rem;
+  color: var(--text-dim);
+  margin-bottom: 0.35rem;
+  line-height: 1.4;
+  max-height: 2.8em;
+  overflow: hidden;
+}
+
+.trace-response {
+  font-size: 0.6rem;
+  color: var(--text);
+  margin-bottom: 0.35rem;
+  line-height: 1.4;
+  max-height: 4.2em;
+  overflow: hidden;
+}
+
+.trace-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.25rem;
+}
+
+.trace-tag {
+  font-family: var(--mono);
+  font-size: 0.5rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-dim);
+}
+
+.trace-tag.preset { color: var(--red); background: rgba(231, 76, 60, 0.1); }
+.trace-tag.pressure { color: var(--yellow); background: rgba(243, 156, 18, 0.1); }
+.trace-tag.shape { color: var(--purple); background: rgba(155, 89, 182, 0.1); }
+.trace-tag.tool { color: var(--green); background: rgba(46, 204, 113, 0.1); }
+.trace-tag.break { color: var(--red); background: rgba(231, 76, 60, 0.25); font-weight: 600; }
+
+.empty-msg {
+  color: var(--text-dim);
+  font-size: 0.65rem;
+  padding: 0.5rem;
+}
+
 /* Log Panel */
 .log-panel {
   display: flex;
@@ -253,6 +334,7 @@ body {
       "s1 s2"
       "s3 s4"
       "presets counters"
+      "traces traces"
       "logs logs";
   }
 }

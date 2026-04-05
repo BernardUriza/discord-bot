@@ -2,7 +2,8 @@
 
 from browser import document, timer, ajax
 
-from .config import VERSION, METRICS_URL, LOGS_URL, REFRESH_INTERVAL
+from .config import METRICS_URL, LOGS_URL, TRACES_URL, REFRESH_INTERVAL
+from .carousel import CardCarousel
 
 document.select_one(".logo span").text = "INSULT"
 
@@ -10,6 +11,7 @@ document.select_one(".logo span").text = "INSULT"
 
 _metrics = {}
 _logs = []
+_traces = []
 _current_filter = "all"
 
 
@@ -26,6 +28,11 @@ def fetch_data():
     req2.open("GET", f"{LOGS_URL}?t={__import__('time').time()}", True)
     req2.bind("complete", _on_logs)
     req2.send()
+
+    req3 = ajax.Ajax()
+    req3.open("GET", f"{TRACES_URL}?t={__import__('time').time()}", True)
+    req3.bind("complete", _on_traces)
+    req3.send()
 
 
 def _on_metrics(req):
@@ -45,6 +52,71 @@ def _on_logs(req):
         import json
         _logs = json.loads(req.text)
         _render_logs()
+
+
+def _on_traces(req):
+    global _traces
+    if req.status == 200:
+        import json
+        _traces = json.loads(req.text)
+        _render_traces()
+
+
+# ── Trace Carousel ───────────────────────────────────────────────
+
+def _render_trace_card(trace):
+    """Render a single message trace as a carousel card."""
+    from browser import html
+
+    card = html.DIV()
+
+    # User + timestamp
+    import time
+    ts = trace.get("ts", 0)
+    time_str = time.strftime("%H:%M", time.localtime(ts)) if ts else "??:??"
+    card <= html.DIV(f"{trace.get('user', '?')} · {time_str}", Class="trace-user")
+
+    # Input
+    inp = trace.get("input", "")
+    card <= html.DIV(f'"{inp}"' if inp else "(empty)", Class="trace-input")
+
+    # Response
+    resp = trace.get("response", "")
+    card <= html.DIV(resp if resp else "(no text)", Class="trace-response")
+
+    # Tags
+    meta = html.DIV(Class="trace-meta")
+    meta <= html.SPAN(trace.get("preset", "?"), Class="trace-tag preset")
+    pressure = trace.get("pressure", 0)
+    if pressure:
+        meta <= html.SPAN(f"P{pressure}", Class="trace-tag pressure")
+    shape = trace.get("expression_shape", "")
+    if shape:
+        meta <= html.SPAN(shape, Class="trace-tag shape")
+    for tool in trace.get("tools", []):
+        meta <= html.SPAN(tool, Class="trace-tag tool")
+    if trace.get("character_break"):
+        meta <= html.SPAN("BREAK!", Class="trace-tag break")
+    if trace.get("anti_pattern"):
+        meta <= html.SPAN("DRIFT", Class="trace-tag break")
+    if trace.get("reactions"):
+        meta <= html.SPAN(" ".join(trace["reactions"][:3]), Class="trace-tag")
+    card <= meta
+
+    return card
+
+
+_trace_carousel = CardCarousel(
+    container_id="traces-carousel",
+    render_card=_render_trace_card,
+    get_id=lambda t: str(t.get("ts", 0)),
+    empty_msg="No messages yet.",
+)
+
+
+def _render_traces():
+    # Most recent first
+    _trace_carousel.render(list(reversed(_traces[-30:])))
 
 
 # ── Rendering ────────────────────────────────────────────────────

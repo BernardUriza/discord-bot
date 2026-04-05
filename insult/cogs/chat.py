@@ -324,6 +324,28 @@ class ChatCog(commands.Cog):
         # Post-generation flow adherence validation (telemetry only)
         validate_flow_adherence(response, flow_analysis)
 
+        # Record message trace for dashboard
+        from insult.core.metrics import record_message_trace
+
+        record_message_trace(
+            {
+                "user": user_name,
+                "user_id": user_id,
+                "channel": channel_id,
+                "input": text[:200],
+                "response": response[:300],
+                "preset": preset.mode.value,
+                "preset_modifiers": [m.value for m in preset.modifiers],
+                "pressure": flow_analysis.pressure.pressure_level,
+                "expression_shape": flow_analysis.expression.selected_shape.value,
+                "expression_flavor": flow_analysis.expression.selected_flavor.value,
+                "epistemic_move": flow_analysis.epistemic.recommended_move.value,
+                "awareness_pattern": flow_analysis.awareness.detected_pattern.value,
+                "tools": [tc.name for tc in llm_response.tool_calls] if llm_response.tool_calls else [],
+                "reactions": reactions,
+            }
+        )
+
         # Background fact extraction
         self._spawn_task(self._extract_user_facts(user_id, user_name, user_facts, recent))
 
