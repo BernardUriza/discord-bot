@@ -78,8 +78,8 @@ ANTI_PATTERN_CHECKS = [
     re.compile(r"(?i)\bto (sum up|summarize|recap)\b"),
     re.compile(r"(?i)\b(en resumen|para resumir|en conclusion)\b"),
     re.compile(r"(?i)\blet me (be clear|clarify)\b"),
-    # Stage directions
-    re.compile(r"\*[^*]+\*"),  # *action*
+    # Stage directions — *sighs*, *leans back* (NOT bold **text** or emphasis *word*)
+    re.compile(r"(?<!\*)\*(?!\*)(?:sighs?|leans?|pauses?|smiles?|nods?|shrugs?|laughs?|winks?|looks|turns|walks|grabs|adjusts|crosses|tilts)[^*]*\*(?!\*)"),
     re.compile(r"\[[^\]]*(?:leans|sighs|laughs|pauses|smiles|nods|shrugs)[^\]]*\]", re.I),
     # Product consultant / structured formatting (AI formatting, not human speech)
     re.compile(r"(?i)\b(tier \d|tier básico|tier premium|nivel \d)\b"),
