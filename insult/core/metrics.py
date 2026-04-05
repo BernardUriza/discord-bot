@@ -1,0 +1,138 @@
+"""Metrics collection and Azure Blob export for the dashboard.
+
+Collects structlog events in a ring buffer and periodically uploads
+a JSON snapshot to Azure Blob Storage for the Brython dashboard to fetch.
+"""
+
+import json
+import os
+import time
+from collections import deque
+
+import structlog
+
+log = structlog.get_logger()
+
+CONTAINER_NAME = "insult-bot"
+METRICS_BLOB = "metrics.json"
+LOGS_BLOB = "logs.json"
+MAX_LOG_ENTRIES = 200  # Keep last 200 log events
+
+# Global ring buffer for log events
+_log_buffer: deque[dict] = deque(maxlen=MAX_LOG_ENTRIES)
+
+# Global counters (reset on restart)
+_counters: dict[str, int] = {
+    "messages_total": 0,
+    "llm_requests": 0,
+    "llm_errors": 0,
+    "preset_default_abrasive": 0,
+    "preset_playful_roast": 0,
+    "preset_intellectual_pressure": 0,
+    "preset_relational_probe": 0,
+    "preset_respectful_serious": 0,
+    "preset_meta_deflection": 0,
+    "character_breaks": 0,
+    "anti_patterns": 0,
+    "whisper_transcriptions": 0,
+    "reminders_created": 0,
+    "facts_extracted": 0,
+    "facts_failed": 0,
+}
+
+_start_time: float = time.time()
+
+
+def record_event(event: dict) -> None:
+    """Record a structlog event to the ring buffer and update counters."""
+    entry = {
+        "ts": time.time(),
+        "event": event.get("event", ""),
+        **{k: v for k, v in event.items() if k != "event"},
+    }
+    _log_buffer.append(entry)
+
+    # Update counters based on event type
+    evt = entry["event"]
+    if evt == "llm_request":
+        _counters["llm_requests"] += 1
+    elif evt in ("llm_rate_error", "llm_timeout_error", "llm_auth_error", "llm_api_error"):
+        _counters["llm_errors"] += 1
+    elif evt == "preset_classified":
+        _counters["messages_total"] += 1
+        mode = entry.get("mode", "")
+        key = f"preset_{mode}"
+        if key in _counters:
+            _counters[key] += 1
+    elif evt == "character_break_detected":
+        _counters["character_breaks"] += 1
+    elif evt == "anti_pattern_detected":
+        _counters["anti_patterns"] += 1
+    elif evt == "whisper_transcribed":
+        _counters["whisper_transcriptions"] += 1
+    elif evt == "reminder_created":
+        _counters["reminders_created"] += 1
+    elif evt == "facts_extracted":
+        _counters["facts_extracted"] += 1
+    elif evt == "facts_extraction_failed":
+        _counters["facts_failed"] += 1
+
+
+def build_metrics_snapshot(bot_latency_ms: int, guilds: int, db_stats: dict) -> dict:
+    """Build the full metrics snapshot for the dashboard."""
+    return {
+        "timestamp": time.time(),
+        "uptime_seconds": int(time.time() - _start_time),
+        "bot": {
+            "latency_ms": bot_latency_ms,
+            "guilds": guilds,
+        },
+        "db": db_stats,
+        "counters": dict(_counters),
+    }
+
+
+def build_logs_snapshot() -> list[dict]:
+    """Return the log buffer as a list (most recent last)."""
+    return list(_log_buffer)
+
+
+async def upload_dashboard_data(bot_latency_ms: int, guilds: int, db_stats: dict) -> None:
+    """Upload metrics + logs JSON blobs to Azure Blob Storage."""
+    if not os.environ.get("AZURE_STORAGE_CONNECTION_STRING"):
+        return
+
+    try:
+        from azure.storage.blob.aio import BlobServiceClient
+
+        conn_str = os.environ["AZURE_STORAGE_CONNECTION_STRING"]
+        async with BlobServiceClient.from_connection_string(conn_str) as client:
+            container = client.get_container_client(CONTAINER_NAME)
+
+            # Upload metrics
+            metrics = build_metrics_snapshot(bot_latency_ms, guilds, db_stats)
+            metrics_blob = container.get_blob_client(METRICS_BLOB)
+            await metrics_blob.upload_blob(
+                json.dumps(metrics, default=str),
+                overwrite=True,
+                content_settings=_blob_content_settings(),
+            )
+
+            # Upload logs
+            logs = build_logs_snapshot()
+            logs_blob = container.get_blob_client(LOGS_BLOB)
+            await logs_blob.upload_blob(
+                json.dumps(logs, default=str),
+                overwrite=True,
+                content_settings=_blob_content_settings(),
+            )
+
+    except Exception:
+        log.exception("dashboard_upload_failed")
+
+
+def _blob_content_settings():
+    """Return ContentSettings for JSON blobs with CORS-friendly headers."""
+    from azure.storage.blob import ContentSettings
+
+    return ContentSettings(content_type="application/json", cache_control="no-cache, max-age=0")

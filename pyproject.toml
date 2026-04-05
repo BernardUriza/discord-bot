@@ -1,6 +1,6 @@
 [project]
 name = "insult"
-version = "1.8.1"
+version = "1.9.0"
 requires-python = ">=3.14"
 
 [tool.ruff]
@@ -52,6 +52,7 @@ omit = [
     "insult/cogs/voice.py",    # Voice TTS (requires real Discord + Azure OpenAI)
     "insult/core/proactive.py",  # Proactive messaging (requires real bot + LLM, integration test territory)
     "insult/core/vectors.py",  # sqlite-vec + sentence-transformers I/O (vector search)
+    "insult/core/metrics.py",  # Azure Blob I/O (dashboard export)
 ]
 
 [tool.coverage.report]

@@ -14,6 +14,7 @@ from insult.core.backup import download_db, is_azure_configured, upload_db
 from insult.core.character import _get_current_time_context, strip_metadata
 from insult.core.delivery import MESSAGE_DELIMITER, split_response
 from insult.core.errors import get_error_response
+from insult.core.metrics import upload_dashboard_data
 from insult.core.proactive import (
     generate_proactive_message,
     generate_world_scan_message,
@@ -287,13 +288,18 @@ def _build(container: Container):
     async def _health_check():
         try:
             stats = await memory.get_stats()
+            latency_ms = round(bot.latency * 1000)
+            guilds = len(bot.guilds)
             log.info(
                 "health_check",
-                latency_ms=round(bot.latency * 1000),
-                guilds=len(bot.guilds),
+                latency_ms=latency_ms,
+                guilds=guilds,
                 total_messages=stats["total_messages"],
                 unique_users=stats["unique_users"],
             )
+            # Upload dashboard metrics to Azure Blob (piggyback on health check)
+            if is_azure_configured():
+                await upload_dashboard_data(latency_ms, guilds, stats)
         except Exception:
             log.exception("health_check_failed")
 

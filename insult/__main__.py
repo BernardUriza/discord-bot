@@ -5,6 +5,31 @@ import asyncio
 import structlog
 import typer
 
+from insult.core.metrics import record_event
+
+
+def _metrics_processor(logger, method_name, event_dict):
+    """Structlog processor that feeds events to the dashboard metrics collector."""
+    record_event(event_dict)
+    return event_dict
+
+
+structlog.configure(
+    processors=[
+        structlog.contextvars.merge_contextvars,
+        structlog.processors.add_log_level,
+        structlog.processors.StackInfoRenderer(),
+        structlog.dev.set_exc_info,
+        structlog.processors.TimeStamper(fmt="iso"),
+        _metrics_processor,
+        structlog.dev.ConsoleRenderer(),
+    ],
+    wrapper_class=structlog.make_filtering_bound_logger(0),
+    context_class=dict,
+    logger_factory=structlog.PrintLoggerFactory(),
+    cache_logger_on_first_use=True,
+)
+
 log = structlog.get_logger()
 app = typer.Typer(help="Insult — Discord bot con memoria longitudinal + Claude API")
 
