@@ -1,19 +1,23 @@
-"""CLI entry point: python -m insult run"""
+"""CLI entry point: python -m insult run
+
+IMPORTANT: structlog must be configured BEFORE any insult module is imported,
+because modules do `log = structlog.get_logger()` at import time.
+"""
 
 import asyncio
 
 import structlog
-import typer
-
-from insult.core.metrics import record_event
 
 
 def _metrics_processor(logger, method_name, event_dict):
     """Structlog processor that feeds events to the dashboard metrics collector."""
+    from insult.core.metrics import record_event
+
     record_event(event_dict)
     return event_dict
 
 
+# Configure structlog FIRST — before any insult.* import
 structlog.configure(
     processors=[
         structlog.contextvars.merge_contextvars,
@@ -27,8 +31,11 @@ structlog.configure(
     wrapper_class=structlog.make_filtering_bound_logger(0),
     context_class=dict,
     logger_factory=structlog.PrintLoggerFactory(),
-    cache_logger_on_first_use=True,
+    cache_logger_on_first_use=False,  # Don't cache — ensures all loggers use this config
 )
+
+# NOW import everything else
+import typer  # noqa: E402
 
 log = structlog.get_logger()
 app = typer.Typer(help="Insult — Discord bot con memoria longitudinal + Claude API")
@@ -79,7 +86,6 @@ def db_clean(
         await store.connect()
 
         if dry_run:
-            # Preview only — use get_stats-like query without deleting
             await store._ensure_connection()
             cursor = await store._db.execute("SELECT COUNT(*) FROM messages WHERE timestamp < ?", (cutoff,))
             row = await cursor.fetchone()
