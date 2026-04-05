@@ -108,9 +108,81 @@ def _render_trace_card(trace):
         meta <= html.SPAN("DRIFT", Class="trace-tag break")
     if trace.get("reactions"):
         meta <= html.SPAN(" ".join(trace["reactions"][:3]), Class="trace-tag")
+
+    # Detail icon
+    detail_btn = html.SPAN("\u2197", Class="trace-detail-btn")
+    detail_btn.bind("click", lambda ev, t=trace: _show_trace_modal(t))
+    meta <= detail_btn
     card <= meta
 
     return card
+
+
+def _show_trace_modal(trace):
+    """Show a modal with full reasoning details for a message trace."""
+    from browser import html, window
+    import time
+
+    # Remove existing modal if any
+    existing = document.select(".trace-modal-overlay")
+    for e in existing:
+        e.remove()
+
+    overlay = html.DIV(Class="trace-modal-overlay")
+
+    modal = html.DIV(Class="trace-modal")
+
+    # Close button
+    close_btn = html.BUTTON("\u00d7", Class="trace-modal-close")
+    close_btn.bind("click", lambda ev: overlay.remove())
+    modal <= close_btn
+
+    # Header
+    ts = trace.get("ts", 0)
+    time_str = time.strftime("%H:%M:%S", time.localtime(ts)) if ts else "??:??:??"
+    modal <= html.H2(f"{trace.get('user', '?')} \u00b7 {time_str}", Class="trace-modal-title")
+
+    # Input
+    modal <= html.DIV("INPUT", Class="trace-modal-label")
+    modal <= html.DIV(trace.get("input", "(empty)"), Class="trace-modal-text input")
+
+    # Response
+    modal <= html.DIV("RESPONSE", Class="trace-modal-label")
+    modal <= html.DIV(trace.get("response", "(no text)"), Class="trace-modal-text response")
+
+    # Reasoning grid
+    modal <= html.DIV("REASONING", Class="trace-modal-label")
+    grid = html.DIV(Class="trace-modal-grid")
+
+    rows = [
+        ("Preset", trace.get("preset", "?"), "preset"),
+        ("Modifiers", ", ".join(trace.get("preset_modifiers", [])) or "none", ""),
+        ("Pressure", f"Level {trace.get('pressure', 0)}", "pressure"),
+        ("Expression Shape", trace.get("expression_shape", "?"), "shape"),
+        ("Expression Flavor", trace.get("expression_flavor", "?"), ""),
+        ("Epistemic Move", trace.get("epistemic_move", "none"), ""),
+        ("Awareness Pattern", trace.get("awareness_pattern", "none"), ""),
+        ("Tools Used", ", ".join(trace.get("tools", [])) or "none", "tool"),
+        ("Reactions", " ".join(trace.get("reactions", [])) or "none", ""),
+        ("Channel", trace.get("channel", "?"), ""),
+        ("User ID", trace.get("user_id", "?"), ""),
+    ]
+
+    for label, value, tag_class in rows:
+        row = html.DIV(Class="trace-modal-row")
+        row <= html.SPAN(label, Class="trace-modal-key")
+        val_span = html.SPAN(str(value), Class=f"trace-modal-val {tag_class}")
+        row <= val_span
+        grid <= row
+
+    modal <= grid
+
+    overlay <= modal
+
+    # Close on overlay click
+    overlay.bind("click", lambda ev: overlay.remove() if ev.target == overlay else None)
+
+    document.body <= overlay
 
 
 _trace_carousel = CardCarousel(
