@@ -297,9 +297,10 @@ def _build(container: Container):
                 total_messages=stats["total_messages"],
                 unique_users=stats["unique_users"],
             )
-            # Upload dashboard metrics to Azure Blob (piggyback on health check)
+            # Upload dashboard data to Azure Blob (piggyback on health check)
             if is_azure_configured():
-                await upload_dashboard_data(latency_ms, guilds, stats)
+                all_facts = await memory.get_all_facts()
+                await upload_dashboard_data(latency_ms, guilds, stats, all_facts=all_facts)
         except Exception:
             log.exception("health_check_failed")
 

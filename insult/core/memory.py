@@ -400,6 +400,15 @@ class MemoryStore:
         rows = await cursor.fetchall()
         return [{"id": r[0], "fact": r[1], "category": r[2], "updated_at": r[3]} for r in rows]
 
+    async def get_all_facts(self) -> list[dict]:
+        """Get all facts for all users, grouped by user_id."""
+        await self._ensure_connection()
+        cursor = await self._db.execute(
+            "SELECT user_id, id, fact, category, updated_at FROM user_facts ORDER BY user_id, updated_at DESC",
+        )
+        rows = await cursor.fetchall()
+        return [{"user_id": r[0], "id": r[1], "fact": r[2], "category": r[3], "updated_at": r[4]} for r in rows]
+
     async def save_facts(self, user_id: str, facts: list[dict]):
         """Replace all facts for a user with new ones (full rewrite per extraction).
 

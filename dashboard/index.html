@@ -17,6 +17,10 @@
   <div class="app" id="app">
     <div class="topbar">
       <div class="logo"><span>INSULT</span> Dashboard <div class="logo-dot"></div></div>
+      <div class="tabs">
+        <button class="tab active" id="tab-monitor" data-tab="monitor">Monitor</button>
+        <button class="tab" id="tab-facts" data-tab="facts">Facts</button>
+      </div>
       <div class="status" id="status-indicator">connecting...</div>
     </div>
 
@@ -73,6 +77,20 @@
         </div>
         <div id="log-entries" class="log-entries"></div>
       </div>
+    </div>
+
+    <!-- Facts View (hidden by default) -->
+    <div class="facts-view" id="facts-view" style="display:none">
+      <div class="facts-header">
+        <div class="facts-stats" id="facts-stats"></div>
+        <select id="facts-user-filter" class="filter-select">
+          <option value="all">All Users</option>
+        </select>
+        <select id="facts-category-filter" class="filter-select">
+          <option value="all">All Categories</option>
+        </select>
+      </div>
+      <div class="facts-grid" id="facts-grid"></div>
     </div>
   </div>
 

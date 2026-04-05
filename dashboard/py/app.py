@@ -2,7 +2,7 @@
 
 from browser import document, timer, ajax
 
-from .config import METRICS_URL, LOGS_URL, TRACES_URL, REFRESH_INTERVAL
+from .config import METRICS_URL, LOGS_URL, TRACES_URL, FACTS_URL, REFRESH_INTERVAL
 from .carousel import CardCarousel
 
 document.select_one(".logo span").text = "INSULT"
@@ -12,7 +12,9 @@ document.select_one(".logo span").text = "INSULT"
 _metrics = {}
 _logs = []
 _traces = []
+_facts = []
 _current_filter = "all"
+_current_tab = "monitor"
 
 
 # ── Data Fetching ────────────────────────────────────────────────
@@ -33,6 +35,11 @@ def fetch_data():
     req3.open("GET", f"{TRACES_URL}?t={__import__('time').time()}", True)
     req3.bind("complete", _on_traces)
     req3.send()
+
+    req4 = ajax.Ajax()
+    req4.open("GET", f"{FACTS_URL}?t={__import__('time').time()}", True)
+    req4.bind("complete", _on_facts)
+    req4.send()
 
 
 def _on_metrics(req):
@@ -246,6 +253,117 @@ def _on_filter_change(ev):
 
 
 document["log-filter"].bind("change", _on_filter_change)
+
+
+# ── Facts View ───────────────────────────────────────────────────
+
+def _on_facts(req):
+    global _facts
+    if req.status == 200:
+        import json
+        _facts = json.loads(req.text)
+        if _current_tab == "facts":
+            _render_facts()
+
+
+def _render_facts():
+    from browser import html
+    import time
+
+    grid = document["facts-grid"]
+    grid.clear()
+
+    if not _facts:
+        grid <= html.P("No facts yet.", Class="empty-msg")
+        return
+
+    # Get filter values
+    user_filter = document["facts-user-filter"].value
+    cat_filter = document["facts-category-filter"].value
+
+    # Group by user
+    users = {}
+    categories = set()
+    for f in _facts:
+        uid = f.get("user_id", "?")
+        if user_filter != "all" and uid != user_filter:
+            continue
+        cat = f.get("category", "general")
+        categories.add(cat)
+        if cat_filter != "all" and cat != cat_filter:
+            continue
+        users.setdefault(uid, []).append(f)
+
+    # Update stats
+    document["facts-stats"].text = f"{len(_facts)} facts · {len(set(f.get('user_id','') for f in _facts))} users"
+
+    # Update filter dropdowns (preserve selection)
+    _update_dropdown("facts-user-filter", sorted(set(f.get("user_id", "?") for f in _facts)), user_filter)
+    _update_dropdown("facts-category-filter", sorted(categories), cat_filter)
+
+    # Render cards per user
+    for uid in sorted(users.keys()):
+        facts = users[uid]
+        card = html.DIV(Class="fact-user-card")
+
+        header = html.DIV(Class="fact-user-header")
+        header <= html.SPAN(uid, Class="fact-user-name")
+        header <= html.SPAN(f"{len(facts)} facts", Class="fact-user-count")
+        card <= header
+
+        for f in facts:
+            item = html.DIV(Class="fact-item")
+            cat = f.get("category", "general")
+            item <= html.SPAN(cat, Class=f"fact-category {cat}")
+            item <= html.SPAN(f.get("fact", ""), Class="fact-text")
+            ts = f.get("updated_at", 0)
+            if ts:
+                time_str = time.strftime("%m/%d", time.localtime(float(ts)))
+                item <= html.SPAN(time_str, Class="fact-time")
+            card <= item
+
+        grid <= card
+
+
+def _update_dropdown(element_id, values, current):
+    """Update a select dropdown with values, preserving current selection."""
+    from browser import html
+    sel = document[element_id]
+    sel.clear()
+    sel <= html.OPTION("All", value="all")
+    for v in values:
+        opt = html.OPTION(v, value=v)
+        if v == current:
+            opt.attrs["selected"] = "selected"
+        sel <= opt
+
+
+# ── Tab switching ────────────────────────────────────────────────
+
+def _switch_tab(ev):
+    global _current_tab
+    tab = ev.target.attrs.get("data-tab", "monitor")
+    _current_tab = tab
+
+    # Update tab buttons
+    for t in document.select(".tab"):
+        t.classList.remove("active")
+    ev.target.classList.add("active")
+
+    # Toggle views
+    if tab == "monitor":
+        document.select_one(".bento").style.display = "grid"
+        document["facts-view"].style.display = "none"
+    elif tab == "facts":
+        document.select_one(".bento").style.display = "none"
+        document["facts-view"].style.display = ""
+        _render_facts()
+
+
+document["tab-monitor"].bind("click", _switch_tab)
+document["tab-facts"].bind("click", _switch_tab)
+document["facts-user-filter"].bind("change", lambda ev: _render_facts())
+document["facts-category-filter"].bind("change", lambda ev: _render_facts())
 
 
 # ── Auto-refresh ─────────────────────────────────────────────────

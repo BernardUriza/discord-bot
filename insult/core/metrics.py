@@ -113,8 +113,13 @@ def build_logs_snapshot() -> list[dict]:
     return list(_log_buffer)
 
 
-async def upload_dashboard_data(bot_latency_ms: int, guilds: int, db_stats: dict) -> None:
-    """Upload metrics + logs JSON blobs to Azure Blob Storage."""
+FACTS_BLOB = "facts.json"
+
+
+async def upload_dashboard_data(
+    bot_latency_ms: int, guilds: int, db_stats: dict, all_facts: list[dict] | None = None
+) -> None:
+    """Upload metrics + logs + traces + facts JSON blobs to Azure Blob Storage."""
     if not os.environ.get("AZURE_STORAGE_CONNECTION_STRING"):
         return
 
@@ -151,6 +156,15 @@ async def upload_dashboard_data(bot_latency_ms: int, guilds: int, db_stats: dict
                 overwrite=True,
                 content_settings=_blob_content_settings(),
             )
+
+            # Upload facts (all users)
+            if all_facts is not None:
+                facts_blob = container.get_blob_client(FACTS_BLOB)
+                await facts_blob.upload_blob(
+                    json.dumps(all_facts, default=str),
+                    overwrite=True,
+                    content_settings=_blob_content_settings(),
+                )
 
     except Exception:
         log.exception("dashboard_upload_failed")
