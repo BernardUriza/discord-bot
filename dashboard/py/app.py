@@ -2,10 +2,10 @@
 
 from browser import document, timer, ajax
 
-from .config import METRICS_URL, LOGS_URL, TRACES_URL, FACTS_URL, REFRESH_INTERVAL
+from .config import VERSION, METRICS_URL, LOGS_URL, TRACES_URL, FACTS_URL, REFRESH_INTERVAL
 from .carousel import CardCarousel
 
-document.select_one(".logo span").text = "INSULT"
+document.select_one(".logo").innerHTML = f'<span>INSULT</span> Dashboard <em>v{VERSION}</em> <div class="logo-dot"></div>'
 
 # ── State ────────────────────────────────────────────────────────
 
@@ -334,8 +334,6 @@ def _on_facts(req):
     if req.status == 200:
         import json
         _facts = json.loads(req.text)
-        if _current_tab == "facts":
-            _render_facts()
 
 
 def _render_facts():
@@ -429,7 +427,19 @@ def _switch_tab(ev):
     elif tab == "facts":
         document.select_one(".bento").style.display = "none"
         document["facts-view"].style.display = ""
-        _render_facts()
+        # Force re-fetch facts in case they weren't loaded yet
+        req = ajax.Ajax()
+        req.open("GET", f"{FACTS_URL}?t={__import__('time').time()}", True)
+        req.bind("complete", _on_facts_and_render)
+        req.send()
+
+
+def _on_facts_and_render(req):
+    global _facts
+    if req.status == 200:
+        import json
+        _facts = json.loads(req.text)
+    _render_facts()
 
 
 document["tab-monitor"].bind("click", _switch_tab)

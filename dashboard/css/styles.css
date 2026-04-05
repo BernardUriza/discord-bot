@@ -47,6 +47,7 @@ body {
 }
 
 .logo span { color: var(--red); }
+.logo em { font-style: normal; font-size: 0.55rem; color: var(--text-muted); margin-left: 0.25rem; }
 
 /* Tabs */
 .tabs {
