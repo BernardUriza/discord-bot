@@ -51,11 +51,20 @@ def _parse_response_content(content: list) -> LLMResponse:
 
 
 class LLMClient:
-    def __init__(self, api_key: str, model: str, max_tokens: int, timeout: float = 30.0, max_retries: int = 5):
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        max_tokens: int,
+        timeout: float = 30.0,
+        max_retries: int = 5,
+        cure_model: str = "",
+    ):
         self.client = anthropic.AsyncAnthropic(api_key=api_key, timeout=timeout)
         self.model = model
         self.max_tokens = max_tokens
         self.max_retries = max_retries
+        self.cure_model = cure_model  # Haiku model for language cure (step 7c)
 
     async def _send(
         self,
@@ -177,6 +186,12 @@ class LLMClient:
         anti_patterns = detect_anti_patterns(response.text)
         if anti_patterns:
             log.warning("anti_pattern_detected", patterns=anti_patterns)
+
+        # Step 7c: Language Cure — normalize mixed-language output via Haiku
+        if self.cure_model and response.text:
+            from insult.core.language import language_cure
+
+            response.text = await language_cure(self.client, self.cure_model, response.text)
 
         if response.tool_calls:
             log.info("tool_calls_detected", tools=[tc.name for tc in response.tool_calls])

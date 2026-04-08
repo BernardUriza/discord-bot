@@ -35,6 +35,7 @@ def create_app() -> Container:
         max_tokens=settings.llm_max_tokens,
         timeout=settings.llm_timeout,
         max_retries=settings.llm_max_retries,
+        cure_model=settings.summary_model,  # Haiku for language cure (step 7c)
     )
 
     return Container(settings=settings, memory=memory, llm=llm, bot=bot)
