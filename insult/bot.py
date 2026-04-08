@@ -18,6 +18,7 @@ from insult.core.metrics import upload_dashboard_data
 from insult.core.proactive import (
     generate_proactive_message,
     generate_world_scan_message,
+    get_conversation_state,
     should_send_now,
     should_world_scan,
 )
@@ -65,34 +66,48 @@ def _build(container: Container):
             except Exception:
                 log.exception("azure_backup_failed")
 
-    # --- Proactive Messaging (check every 30 min, send ~every 2-3h) ---
+    # --- Proactive Messaging (check every 30 min, context-aware) ---
     _last_proactive_ts: float | None = None
+    _unanswered_proactives: int = 0  # Exponential backoff counter
 
     @tasks.loop(minutes=30)
     async def _proactive_task():
-        nonlocal _last_proactive_ts
+        nonlocal _last_proactive_ts, _unanswered_proactives
         from datetime import datetime as dt
         from zoneinfo import ZoneInfo
 
         now = dt.now(ZoneInfo("America/Mexico_City"))
 
-        if not should_send_now(now.hour, _last_proactive_ts):
-            return
-
-        # Find the most recently active text channel
+        # Find the most recently active text channel (by actual timestamp, not message count)
         target_channel = None
-        latest_ts = 0
+        latest_msg_ts: float = 0
         for guild in bot.guilds:
             for channel in guild.text_channels:
                 try:
-                    stats = await memory.get_stats(str(channel.id))
-                    if stats["total_messages"] and stats["total_messages"] > latest_ts:
-                        latest_ts = stats["total_messages"]
+                    recent = await memory.get_recent(str(channel.id), limit=1)
+                    if recent and recent[0]["timestamp"] > latest_msg_ts:
+                        latest_msg_ts = recent[0]["timestamp"]
                         target_channel = channel
                 except Exception:
                     log.debug("proactive_channel_skip", channel=channel.name)
 
         if not target_channel:
+            return
+
+        # Get last USER message timestamp (not bot messages) for activity detection
+        try:
+            recent_msgs = await memory.get_recent(str(target_channel.id), limit=15)
+            last_user_msg_ts = None
+            for m in reversed(recent_msgs):
+                if m["role"] == "user":
+                    last_user_msg_ts = m["timestamp"]
+                    break
+        except Exception:
+            log.exception("proactive_context_failed")
+            return
+
+        # Decision: should we send? (checks quiet hours, activity state, backoff)
+        if not should_send_now(now.hour, _last_proactive_ts, last_user_msg_ts, _unanswered_proactives):
             return
 
         # Gather user facts for all known users
@@ -103,38 +118,52 @@ def _build(container: Container):
                 facts = await memory.get_facts(uid)
                 if facts:
                     user_facts[data["user_name"]] = facts
-
-            recent = await memory.get_recent(str(target_channel.id), limit=5)
-            recent_summary = "\n".join(f"{m['user_name']}: {m['content'][:80]}" for m in recent) if recent else ""
         except Exception:
             log.exception("proactive_context_failed")
             return
 
         time_str = _get_current_time_context()
 
-        # ~30% of the time: world scan (search the web and comment)
-        # ~70% of the time: social check-in (ask about users)
+        # ~30% world scan, ~70% social check-in
         is_world_scan = should_world_scan()
-        log.info("proactive_mode_selected", mode="world_scan" if is_world_scan else "social")
+        log.info(
+            "proactive_mode_selected",
+            mode="world_scan" if is_world_scan else "social",
+            unanswered=_unanswered_proactives,
+            conversation_state=get_conversation_state(last_user_msg_ts).value,
+        )
 
         if is_world_scan:
             scan_result = await generate_world_scan_message(
-                container.llm.client, container.settings.llm_model, time_str, user_facts
+                container.llm.client, container.settings.llm_model, time_str, user_facts, recent_msgs
             )
             msg = scan_result.commentary if scan_result else None
         else:
             scan_result = None
             msg = await generate_proactive_message(
-                container.llm.client, container.settings.llm_model, time_str, user_facts, recent_summary
+                container.llm.client, container.settings.llm_model, time_str, user_facts, recent_msgs
             )
 
         if msg:
+            # Route through character guard (Fix 5)
+            from insult.core.character import detect_anti_patterns, detect_break
+
             msg = strip_metadata(msg)
+            breaks = detect_break(msg)
+            if breaks:
+                log.warning("proactive_character_break", patterns=breaks)
+                return  # Don't send broken proactive messages
+
+            anti_patterns = detect_anti_patterns(msg)
+            if anti_patterns:
+                log.warning("proactive_anti_pattern", patterns=anti_patterns)
+
             try:
                 parts = split_response(msg)
                 for part in parts:
                     await target_channel.send(part)
                 _last_proactive_ts = dt.now().timestamp()
+                _unanswered_proactives += 1  # Increment until user responds
 
                 # Store in conversation memory
                 await memory.store(
@@ -148,7 +177,6 @@ def _build(container: Container):
                 # World scan: persist to internal DB + post to feed channel
                 if scan_result:
                     await memory.store_world_scan(scan_result.topic, scan_result.findings, scan_result.commentary)
-                    # Post to dedicated feed channel if configured
                     feed_channel_name = "insult-world-feed"
                     for guild in bot.guilds:
                         feed = next((ch for ch in guild.text_channels if ch.name == feed_channel_name), None)
@@ -163,9 +191,20 @@ def _build(container: Container):
                     channel=target_channel.name,
                     length=len(msg),
                     mode="world_scan" if is_world_scan else "social",
+                    unanswered=_unanswered_proactives,
                 )
             except Exception:
                 log.exception("proactive_send_failed")
+
+    def reset_proactive_backoff():
+        """Reset unanswered counter when a user sends a message after a proactive."""
+        nonlocal _unanswered_proactives
+        if _unanswered_proactives > 0:
+            log.info("proactive_backoff_reset", was=_unanswered_proactives)
+            _unanswered_proactives = 0
+
+    # Expose reset function for ChatCog to call
+    bot._reset_proactive_backoff = reset_proactive_backoff
 
     # --- Channel Summarization (cross-channel awareness, every 15 min) ---
     @tasks.loop(minutes=container.settings.summary_interval_minutes)

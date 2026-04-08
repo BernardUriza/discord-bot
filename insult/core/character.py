@@ -97,6 +97,18 @@ ANTI_PATTERN_CHECKS = [
     # Moralizing without tension — lecturing instead of challenging
     re.compile(r"(?i)\bit'?s important (to|that) (recognize|acknowledge|understand|remember)\b"),
     re.compile(r"(?i)\bes importante (reconocer|entender|recordar|tener en cuenta)\b"),
+    # Language consistency — full English sentences when bot should speak Spanish
+    # Detects sentences starting with common English patterns (5+ words)
+    re.compile(
+        r"(?m)^(?:But |Because |That(?:'s| is) |How (?:can|do) |What about |I think |Also |Maybe |The thing is ).{20,}"
+    ),
+    re.compile(r"(?m)^(?:This is |That was |You should |Let me |Here'?s |Don'?t |It'?s not ).{20,}"),
+    # Full English sentences mid-text (clause with 6+ English words)
+    re.compile(
+        r"(?i)\b(?:that probably|this is exactly|pure anger|zero diplomatic|"
+        r"how can I help|what do you think|I honestly think|"
+        r"you(?:'re| are) (?:right|wrong|amazing|incredible))\b.{10,}"
+    ),
 ]
 
 

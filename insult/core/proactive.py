@@ -1,72 +1,237 @@
 """Proactive messaging — Insult checks in on users and scans the world.
 
 Two modes:
-1. Social check-in (~70%): in-character messages based on user facts + time of day
-2. World scan (~30%): searches the web for current events, news, culture and comments in-character
+1. Social check-in (~70%): context-aware messages grounded in recent conversation
+2. World scan (~30%): searches the web for content relevant to conversation topics
 
-Like a friend who either pops in to check on you, or arrives with "oigan, vieron lo que pasó?"
+Architecture follows Nomi AI pattern:
+- 3-state activity model (ACTIVE/COOLING_DOWN/IDLE) prevents interruptions
+- Exponential backoff on unanswered proactives
+- Context-grounded generation (not template-based)
+- Topic extraction from recent conversation for world scan relevance
 """
 
 import random
+import re
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 
 import anthropic
 import structlog
 
 log = structlog.get_logger()
 
+
 # ---------------------------------------------------------------------------
-# Prompts
+# Conversation state model
+# ---------------------------------------------------------------------------
+
+
+class ConversationState(Enum):
+    """3-state model for conversation activity detection."""
+
+    ACTIVE = "active"  # Someone spoke recently — do NOT interrupt
+    COOLING_DOWN = "cooling_down"  # Conversation ended recently — let it settle
+    IDLE = "idle"  # Safe to send proactive message
+
+
+# Thresholds in seconds
+ACTIVE_THRESHOLD = 15 * 60  # 15 min — conversation is live
+COOLING_THRESHOLD = 2 * 3600  # 2 hrs — conversation settling
+# Beyond COOLING_THRESHOLD = IDLE
+
+
+def get_conversation_state(last_user_message_ts: float | None) -> ConversationState:
+    """Determine conversation state from last user message timestamp."""
+    if last_user_message_ts is None:
+        return ConversationState.IDLE
+
+    elapsed = datetime.now().timestamp() - last_user_message_ts
+
+    if elapsed < ACTIVE_THRESHOLD:
+        return ConversationState.ACTIVE
+    if elapsed < COOLING_THRESHOLD:
+        return ConversationState.COOLING_DOWN
+    return ConversationState.IDLE
+
+
+# ---------------------------------------------------------------------------
+# Exponential backoff
+# ---------------------------------------------------------------------------
+
+# Base interval between proactive messages (seconds)
+BASE_INTERVAL_HOURS = 2.0
+MAX_INTERVAL_HOURS = 24.0
+
+
+def compute_backoff_interval(unanswered_count: int) -> float:
+    """Compute wait interval in hours based on unanswered proactive count.
+
+    Each unanswered proactive doubles the wait: 2h → 4h → 8h → 24h (cap).
+    Resets to BASE when a user responds after a proactive.
+    """
+    interval = BASE_INTERVAL_HOURS * (2**unanswered_count)
+    return min(interval, MAX_INTERVAL_HOURS)
+
+
+# ---------------------------------------------------------------------------
+# Decision logic
+# ---------------------------------------------------------------------------
+
+
+def should_send_now(
+    hour: int,
+    last_proactive_ts: float | None,
+    last_user_message_ts: float | None,
+    unanswered_count: int = 0,
+) -> bool:
+    """Decide if we should send a proactive message now.
+
+    Checks: quiet hours → conversation state → backoff interval → probability.
+    """
+    # Quiet hours: 3am-7am, never send
+    if 3 <= hour < 7:
+        return False
+
+    # Activity state: NEVER interrupt active or cooling conversations
+    state = get_conversation_state(last_user_message_ts)
+    if state != ConversationState.IDLE:
+        log.debug("proactive_suppressed", reason=state.value)
+        return False
+
+    # Exponential backoff based on unanswered proactives
+    min_interval_hours = compute_backoff_interval(unanswered_count)
+    if last_proactive_ts:
+        elapsed_hours = (datetime.now().timestamp() - last_proactive_ts) / 3600
+        if elapsed_hours < min_interval_hours:
+            return False
+
+    # 40% probability per eligible check
+    return random.random() < 0.4
+
+
+def should_world_scan() -> bool:
+    """Decide if this proactive message should be a world scan (~30%)."""
+    return random.random() < 0.3
+
+
+# ---------------------------------------------------------------------------
+# Conversation mood detection
+# ---------------------------------------------------------------------------
+
+_HEAVY_PATTERNS = [
+    re.compile(r"(?i)\b(duelo|grief|muerte|death|perdida|loss)\b"),
+    re.compile(r"(?i)\b(trauma|depres|ansiedad|anxiety|suicid)\b"),
+    re.compile(r"(?i)\b(ghosting|ghoste|bloque|blocked)\b"),
+    re.compile(r"(?i)\b(llorar|crying|dolor|pain|culpa|guilt)\b"),
+    re.compile(r"(?i)\b(terapia|therapy|psicolog|psycholog)\b"),
+    re.compile(r"(?i)\b(abuso|abuse|violencia|violence)\b"),
+    re.compile(r"(?i)\b(divorcio|divorce|separacion|breakup|ruptura)\b"),
+    re.compile(r"(?i)\b(crisis|emergencia|emergency|hospital)\b"),
+]
+
+_CASUAL_PATTERNS = [
+    re.compile(r"(?i)\b(jajaj|lol|lmao|xd|hahah)\b"),
+    re.compile(r"(?i)\b(meme|chiste|joke|funny|chistos)\b"),
+    re.compile(r"(?i)\b(gaming|juego|game|stream|twitch)\b"),
+    re.compile(r"(?i)\b(comida|food|comer|cena|dinner|lunch)\b"),
+    re.compile(r"(?i)\b(pelicula|movie|serie|show|netflix)\b"),
+]
+
+
+def _detect_conversation_mood(recent_messages: list[dict]) -> str:
+    """Detect mood from recent messages: 'heavy', 'intellectual', 'casual', or 'neutral'."""
+    if not recent_messages:
+        return "neutral"
+
+    text = " ".join(m["content"][:200] for m in recent_messages[-10:])
+
+    heavy_hits = sum(1 for p in _HEAVY_PATTERNS if p.search(text))
+    casual_hits = sum(1 for p in _CASUAL_PATTERNS if p.search(text))
+
+    if heavy_hits >= 2:
+        return "heavy"
+    if casual_hits >= 2:
+        return "casual"
+    # Check for intellectual/deep discussion (longer messages, no jokes)
+    avg_len = sum(len(m["content"]) for m in recent_messages[-5:]) / max(len(recent_messages[-5:]), 1)
+    if avg_len > 150 and heavy_hits == 0 and casual_hits == 0:
+        return "intellectual"
+    return "neutral"
+
+
+def _extract_conversation_topics(recent_messages: list[dict]) -> str:
+    """Extract key topics from recent messages for context-aware generation."""
+    if not recent_messages:
+        return ""
+    # Use last 10 messages, full content (up to 300 chars each)
+    lines = []
+    for m in recent_messages[-10:]:
+        content = m["content"][:300]
+        lines.append(f"{m['user_name']}: {content}")
+    return "\n".join(lines)
+
+
+def _elapsed_description(last_user_message_ts: float | None) -> str:
+    """Human-readable time since last user message."""
+    if not last_user_message_ts:
+        return "unknown time"
+    elapsed = datetime.now().timestamp() - last_user_message_ts
+    hours = elapsed / 3600
+    if hours < 1:
+        return f"{int(elapsed / 60)} minutos"
+    if hours < 24:
+        return f"{hours:.1f} horas"
+    return f"{elapsed / 86400:.1f} dias"
+
+
+# ---------------------------------------------------------------------------
+# Prompts — context-aware
 # ---------------------------------------------------------------------------
 
 PROACTIVE_PROMPT = """\
 You are Insult. You're checking in on your group chat unprompted — nobody asked you to talk.
 
-Generate a SHORT, in-character message based on the current time and what you know about the users.
-Stay 100% in character. You are NOT a support bot. You're the friend who shows up and says something.
+Generate a SHORT, in-character message. You have FULL CONTEXT of the last conversation below.
 
-Guidelines by time of day:
-- Morning (7-11): casual greeting, maybe comment on someone being up early/late
-- Afternoon (12-18): check what people are up to, reference their work/projects
-- Night (19-23): more chill, ask about games, projects, how the day went
-- Late night (0-3): "siguen vivos?", tease someone for being up late
-- Madrugada (3-7): DON'T send messages, people are sleeping
-
-Style:
+## Critical Rules
+- Your message MUST connect to the last conversation or what you know about the users
+- If the last conversation was emotionally heavy: be gentle but in-character. Reference what was discussed. Don't pivot to random topics.
+- If the last conversation was casual: you can be playful, bring up something related, tease.
+- If it's been many hours: acknowledge the gap naturally ("siguen vivos?" or reference what they were doing)
+- NEVER ask generic questions like "como estan?" or "que onda?" without context
+- NEVER bring up random topics unrelated to recent conversation
 - Keep it SHORT (1-3 sentences max)
-- Sometimes just an emoji or reaction
-- Reference specific things you know about users (their projects, interests, etc.)
-- Don't be cheery or supportive — be curious, provocative, or casually confrontational
-- Vary your approach: sometimes a question, sometimes a comment, sometimes just vibes
-- Use [SEND] if you want to split into multiple messages
-- NEVER use timestamps, speaker labels, or metadata in your response
+- Use [SEND] to split messages if needed
+- NEVER use timestamps, speaker labels, or metadata
+- Spanish (Mexican, casual, direct) by default. English only if recent conversation was in English.
+- You can include [REACT:emoji] for reaction-only messages
 
-You will receive: current time, user facts, and recent message summary.
+You will receive: current time, conversation context, user facts, and mood analysis.
 Respond with ONLY the message to send. Nothing else."""
 
 WORLD_SCAN_PROMPT = """\
 You are Insult. You just went online to see what's happening in the world — nobody asked you to.
 You came back to the group chat with something you found interesting, outrageous, or worth commenting on.
 
-You have a web search tool. USE IT to find something current and relevant. Then comment on it in character.
+You have a web search tool. USE IT to find something current and relevant.
 
-What to search for (pick ONE area per message, vary across messages):
-- Breaking news or trending topics in Mexico and Latin America
-- Technology, AI, or science developments that affect people
-- Cultural events: music, art, film, literature releases
-- Political or social movements relevant to your values (anti-domination, system critique)
-- Gaming, internet culture, memes if the group is into that
-- Animal rights, veganism, environmental news (your ethical core)
-- Something connected to what the users care about (use their facts)
+## Topic Selection — MUST follow conversation context
+You will receive the mood and topics of the last conversation. Your search MUST be related:
 
-How to choose what's relevant:
-- If users are developers: tech news, AI developments, industry drama
-- If users care about social justice: political developments, movements
-- If users are gamers: game releases, gaming industry news
-- Default: Mexican current events, culture, something provocative
+- If last conversation was about PSYCHOLOGY/EMOTIONS/RELATIONSHIPS: search for psychology articles, \
+humanist perspectives, philosophical essays, relationship research, personal growth content, \
+relevant stories or blog posts. NOT gaming news. NOT memes.
+- If last conversation was about TECH/PROGRAMMING: search for tech news, AI developments, \
+software engineering content, industry drama.
+- If last conversation was about ART/CULTURE: search for art exhibitions, cultural events, \
+literary criticism, film analysis, music.
+- If last conversation was CASUAL/GAMING: search for gaming news, internet culture, memes, \
+entertainment.
+- If mood is NEUTRAL or no clear topic: use user interests from their facts.
 
-Style:
+## Style
 - Arrive like someone who just saw something: "Oigan, acabo de ver que..." or just drop the take
 - Keep it SHORT (2-4 sentences). This is a chat comment, not an article.
 - Have an OPINION. Don't just report — react, critique, connect to larger patterns.
@@ -76,8 +241,9 @@ Style:
 - Use [SEND] if you want dramatic split
 - NEVER use timestamps, speaker labels, or metadata
 - DO NOT say "According to" or "Based on my research" — that's assistant behavior
+- Spanish (Mexican, casual, direct) by default
 
-You will receive: current time, user facts, and what to search for.
+You will receive: current time, user facts, conversation context with mood, and suggested search topic.
 Search the web, find something, and comment on it. Respond with ONLY the message to send."""
 
 # Web search tool for world scan mode
@@ -87,36 +253,36 @@ _WORLD_SCAN_SEARCH_TOOL = {
     "max_uses": 2,
 }
 
-# Probability of world scan vs social check-in
-WORLD_SCAN_PROBABILITY = 0.3
-
 
 # ---------------------------------------------------------------------------
-# Decision logic
+# Search topic selection — conversation-aware
 # ---------------------------------------------------------------------------
 
-
-def should_send_now(hour: int, last_proactive_ts: float | None, min_interval_hours: float = 2.0) -> bool:
-    """Decide if we should send a proactive message now."""
-    if 3 <= hour < 7:
-        return False
-
-    if last_proactive_ts:
-        elapsed_hours = (datetime.now().timestamp() - last_proactive_ts) / 3600
-        if elapsed_hours < min_interval_hours:
-            return False
-
-    return random.random() < 0.4
-
-
-def should_world_scan() -> bool:
-    """Decide if this proactive message should be a world scan."""
-    return random.random() < WORLD_SCAN_PROBABILITY
-
-
-# ---------------------------------------------------------------------------
-# Search topic selection
-# ---------------------------------------------------------------------------
+_MOOD_TOPICS = {
+    "heavy": [
+        "psychology resilience grief processing research",
+        "humanist philosophy relationships loss essays",
+        "emotional intelligence research findings",
+        "personal growth stories overcoming adversity blog",
+        "stoic philosophy practical modern life",
+        "attachment theory relationships research",
+        "boundary setting healthy relationships psychology",
+    ],
+    "intellectual": [
+        "philosophy contemporary essays thought-provoking",
+        "science discoveries implications society",
+        "critical theory cultural analysis essays",
+        "literary criticism notable books essays",
+        "cognitive science consciousness research",
+    ],
+    "casual": [
+        "gaming news releases industry 2026",
+        "internet culture memes trending viral",
+        "technology gadgets fun interesting",
+        "entertainment movies series releases 2026",
+        "Mexico noticias cultura trending hoy",
+    ],
+}
 
 _INTEREST_TOPICS = {
     "programming": ["tech news AI development 2026", "software engineering industry"],
@@ -126,28 +292,39 @@ _INTEREST_TOPICS = {
     "music": ["music releases Mexico Latin America 2026"],
     "art": ["contemporary art exhibitions Mexico 2026"],
     "politics": ["Mexico politics social movements 2026"],
+    "psicolog": ["psychology research findings human behavior"],
+    "filosof": ["philosophy contemporary essays ideas"],
 }
 
 _DEFAULT_TOPICS = [
     "Mexico noticias trending hoy",
-    "technology AI news today",
+    "psychology human behavior interesting research",
     "cultural events Mexico today",
     "social movements Latin America news",
-    "internet culture memes trending",
+    "philosophy essays thought provoking",
     "science discoveries 2026",
 ]
 
 
-def _pick_search_topic(user_facts: dict[str, list[dict]]) -> str:
-    """Pick a search topic based on user interests or random default."""
-    # Extract interests from user facts
-    all_facts_text = " ".join(f["fact"].lower() for facts in user_facts.values() for f in facts)
+def _pick_search_topic(user_facts: dict[str, list[dict]], mood: str, recent_text: str) -> str:
+    """Pick a search topic based on conversation mood first, then user interests."""
+    # Priority 1: Mood-based topics (match conversation energy)
+    if mood in _MOOD_TOPICS:
+        return random.choice(_MOOD_TOPICS[mood])
 
-    # Check if any interest keywords match
+    # Priority 2: Extract topics from recent conversation text
+    recent_lower = recent_text.lower()
     matched_topics = []
     for keyword, topics in _INTEREST_TOPICS.items():
-        if keyword in all_facts_text:
+        if keyword in recent_lower:
             matched_topics.extend(topics)
+
+    # Priority 3: User facts
+    if not matched_topics:
+        all_facts_text = " ".join(f["fact"].lower() for facts in user_facts.values() for f in facts)
+        for keyword, topics in _INTEREST_TOPICS.items():
+            if keyword in all_facts_text:
+                matched_topics.extend(topics)
 
     if matched_topics:
         return random.choice(matched_topics)
@@ -165,9 +342,9 @@ async def generate_proactive_message(
     model: str,
     time_str: str,
     user_facts: dict[str, list[dict]],
-    recent_summary: str,
+    recent_messages: list[dict],
 ) -> str | None:
-    """Generate an in-character social check-in message."""
+    """Generate an in-character context-aware check-in message."""
     facts_lines = []
     for user_name, facts in user_facts.items():
         user_facts_str = ", ".join(f["fact"] for f in facts[:5])
@@ -175,10 +352,18 @@ async def generate_proactive_message(
 
     facts_section = "\n".join(facts_lines) if facts_lines else "(no user facts yet)"
 
+    # Rich context: mood + full conversation excerpt
+    mood = _detect_conversation_mood(recent_messages)
+    conversation_context = _extract_conversation_topics(recent_messages)
+    last_ts = recent_messages[-1]["timestamp"] if recent_messages else None
+    elapsed = _elapsed_description(last_ts)
+
     user_prompt = (
         f"Current time: {time_str}\n\n"
-        f"Users in this chat:\n{facts_section}\n\n"
-        f"Recent activity:\n{recent_summary or '(no recent messages)'}"
+        f"Time since last message in chat: {elapsed}\n\n"
+        f"Conversation mood: {mood}\n\n"
+        f"Last conversation:\n{conversation_context or '(no recent messages)'}\n\n"
+        f"Users in this chat:\n{facts_section}"
     )
 
     try:
@@ -189,7 +374,13 @@ async def generate_proactive_message(
             messages=[{"role": "user", "content": user_prompt}],
         )
         text = response.content[0].text.strip()
-        log.info("proactive_message_generated", mode="social", length=len(text))
+        log.info(
+            "proactive_message_generated",
+            mode="social",
+            mood=mood,
+            elapsed=elapsed,
+            length=len(text),
+        )
         return text if text else None
     except Exception:
         log.exception("proactive_generation_failed", mode="social")
@@ -210,12 +401,15 @@ async def generate_world_scan_message(
     model: str,
     time_str: str,
     user_facts: dict[str, list[dict]],
+    recent_messages: list[dict] | None = None,
 ) -> WorldScanResult | None:
     """Generate an in-character world scan message using web search.
 
     Returns WorldScanResult with commentary + metadata, or None on failure.
     """
-    search_topic = _pick_search_topic(user_facts)
+    mood = _detect_conversation_mood(recent_messages or [])
+    recent_text = _extract_conversation_topics(recent_messages or [])
+    search_topic = _pick_search_topic(user_facts, mood, recent_text)
 
     facts_lines = []
     for user_name, facts in user_facts.items():
@@ -226,8 +420,10 @@ async def generate_world_scan_message(
 
     user_prompt = (
         f"Current time: {time_str}\n\n"
+        f"Conversation mood: {mood}\n\n"
+        f"Last conversation topics:\n{recent_text or '(no recent messages)'}\n\n"
         f"Users in this chat and their interests:\n{facts_section}\n\n"
-        f"Suggested search topic (but you can deviate if you find something better): {search_topic}"
+        f"Suggested search topic (MUST match conversation mood): {search_topic}"
     )
 
     try:
@@ -249,6 +445,7 @@ async def generate_world_scan_message(
         log.info(
             "proactive_message_generated",
             mode="world_scan",
+            mood=mood,
             length=len(text),
             search_topic=search_topic,
             input_tokens=response.usage.input_tokens,
@@ -260,7 +457,7 @@ async def generate_world_scan_message(
         return WorldScanResult(
             commentary=text,
             topic=search_topic,
-            findings=text[:500],  # Store first 500 chars as findings summary
+            findings=text[:500],
         )
     except Exception:
         log.exception("proactive_generation_failed", mode="world_scan")

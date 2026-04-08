@@ -99,6 +99,10 @@ class ChatCog(commands.Cog):
         if not text and not message.attachments:
             return
 
+        # Reset proactive backoff: a user spoke, so proactive timing resets
+        if hasattr(self.bot, "_reset_proactive_backoff"):
+            self.bot._reset_proactive_backoff()
+
         if len(text) > MAX_MESSAGE_LENGTH:
             await message.channel.send(get_error_response("too_long"))
             return
