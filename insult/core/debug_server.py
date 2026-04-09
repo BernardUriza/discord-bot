@@ -116,7 +116,7 @@ def build_app(memory: MemoryStore, debug_token: str) -> web.Application:
 async def start_debug_server(
     memory: MemoryStore,
     debug_token: str,
-    host: str = "0.0.0.0",  # noqa: S104 — intentional; security is via token
+    host: str = "127.0.0.1",
     port: int = 8787,
 ) -> web.AppRunner:
     """Start the debug server and return the runner for lifecycle management."""

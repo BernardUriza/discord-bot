@@ -49,8 +49,10 @@ class Settings(BaseSettings):
 
     # Debug HTTP server (read-only introspection)
     # If debug_token is empty, the server does NOT start (fail-closed).
+    # Default binds to localhost only. Override via DEBUG_HOST=0.0.0.0 for
+    # container networking if ingress is ever enabled.
     debug_token: SecretStr = SecretStr("")
-    debug_host: str = "0.0.0.0"  # noqa: S104 — intentional; gated by token + network boundary
+    debug_host: str = "127.0.0.1"
     debug_port: int = 8787
 
     # Paths
