@@ -25,6 +25,12 @@ def memory_with_data():
     mem.get_channel_activity_since = AsyncMock(
         return_value=[{"channel_id": "111", "count": 20}, {"channel_id": "222", "count": 5}]
     )
+    mem.get_channels_overview = AsyncMock(
+        return_value=[
+            {"channel_id": "111", "channel_name": "general", "guild_id": "gid", "count": 50, "last_ts": 1700000000.0},
+            {"channel_id": "222", "channel_name": "random", "guild_id": "gid", "count": 10, "last_ts": 1699999000.0},
+        ]
+    )
     return mem
 
 
@@ -115,8 +121,24 @@ async def test_channels_endpoint(client, memory_with_data):
     memory_with_data.get_channel_activity_since.assert_awaited_once()
 
 
-async def test_channels_missing_guild_id(client):
+async def test_channels_without_guild_returns_overview(client, memory_with_data):
+    """When guild_id is omitted, /debug/channels returns overview of all channels."""
     resp = await client.get("/debug/channels", headers={"Authorization": f"Bearer {TOKEN}"})
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["count"] == 2
+    assert data["channels"][0]["channel_name"] == "general"
+    memory_with_data.get_channels_overview.assert_awaited_once_with(limit=50)
+
+
+async def test_channels_overview_custom_limit(client, memory_with_data):
+    resp = await client.get("/debug/channels?limit=10", headers={"Authorization": f"Bearer {TOKEN}"})
+    assert resp.status == 200
+    memory_with_data.get_channels_overview.assert_awaited_once_with(limit=10)
+
+
+async def test_channels_overview_invalid_limit(client):
+    resp = await client.get("/debug/channels?limit=notanumber", headers={"Authorization": f"Bearer {TOKEN}"})
     assert resp.status == 400
 
 

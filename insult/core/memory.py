@@ -497,6 +497,26 @@ class MemoryStore:
         rows = await cursor.fetchall()
         return [{"channel_id": r[0], "count": r[1]} for r in rows]
 
+    async def get_channels_overview(self, limit: int = 50) -> list[dict]:
+        """Returns all channels with message counts and latest timestamp. Debug helper."""
+        await self._ensure_connection()
+        cursor = await self._db.execute(
+            "SELECT channel_id, MAX(channel_name), MAX(guild_id), COUNT(*), MAX(timestamp) "
+            "FROM messages GROUP BY channel_id ORDER BY MAX(timestamp) DESC LIMIT ?",
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "channel_id": r[0],
+                "channel_name": r[1],
+                "guild_id": r[2],
+                "count": r[3],
+                "last_ts": r[4],
+            }
+            for r in rows
+        ]
+
     async def get_recent_for_summary(self, channel_id: str, limit: int = 50) -> list[dict]:
         """Get recent messages for summarization (used by background task)."""
         await self._ensure_connection()

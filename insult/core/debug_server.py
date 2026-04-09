@@ -76,9 +76,19 @@ async def _handle_messages(request: web.Request) -> web.Response:
 
 
 async def _handle_channels(request: web.Request) -> web.Response:
+    memory = request.app[_MEMORY_KEY]
     guild_id = request.query.get("guild_id")
+
+    # If no guild_id, return overview of all channels across all guilds
     if not guild_id:
-        return _bad_request("guild_id is required")
+        try:
+            limit = int(request.query.get("limit", "50"))
+        except ValueError:
+            return _bad_request("limit must be an integer")
+        if limit < 1 or limit > 500:
+            return _bad_request("limit must be between 1 and 500")
+        channels = await memory.get_channels_overview(limit=limit)
+        return web.json_response({"count": len(channels), "channels": channels})
 
     try:
         since_hours = float(request.query.get("since_hours", "24"))
@@ -88,7 +98,6 @@ async def _handle_channels(request: web.Request) -> web.Response:
     import time as _time
 
     since_ts = _time.time() - (since_hours * 3600)
-    memory = request.app[_MEMORY_KEY]
     activity = await memory.get_channel_activity_since(guild_id, since_ts)
     return web.json_response(
         {"guild_id": guild_id, "since_hours": since_hours, "count": len(activity), "channels": activity}
