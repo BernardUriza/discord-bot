@@ -1,6 +1,6 @@
 [project]
 name = "insult"
-version = "2.1.2"
+version = "2.1.3"
 requires-python = ">=3.14"
 
 [tool.ruff]
@@ -54,6 +54,7 @@ omit = [
     "insult/core/proactive.py",  # Proactive messaging (requires real bot + LLM, integration test territory)
     "insult/core/vectors.py",  # sqlite-vec + sentence-transformers I/O (vector search)
     "insult/core/metrics.py",  # Azure Blob I/O (dashboard export)
+    "insult/core/debug_server.py",  # aiohttp debug endpoints (integration test territory)
 ]
 
 [tool.coverage.report]

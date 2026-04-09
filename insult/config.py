@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     summary_model: str = "claude-haiku-4-5-20251001"
     summary_interval_minutes: int = 15
 
+    # Debug HTTP server (read-only introspection)
+    # If debug_token is empty, the server does NOT start (fail-closed).
+    debug_token: SecretStr = SecretStr("")
+    debug_host: str = "0.0.0.0"  # noqa: S104 — intentional; gated by token + network boundary
+    debug_port: int = 8787
+
     # Paths
     storage_dir: Path = _PROJECT_ROOT / "storage"
     db_path: Path = _PROJECT_ROOT / "storage" / "memory.db"

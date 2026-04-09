@@ -12,6 +12,7 @@ from insult.cogs import ChatCog, UtilityCog
 from insult.cogs.voice import VoiceCog
 from insult.core.backup import download_db, is_azure_configured, upload_db
 from insult.core.character import _get_current_time_context, strip_metadata
+from insult.core.debug_server import start_debug_server, stop_debug_server
 from insult.core.delivery import MESSAGE_DELIMITER, split_response
 from insult.core.errors import get_error_response
 from insult.core.metrics import upload_dashboard_data
@@ -31,6 +32,7 @@ def _build(container: Container):
     """Register cogs and event handlers on the bot."""
     bot = container.bot
     memory = container.memory
+    _debug_runner = None  # type: ignore[var-annotated]
 
     # --- Graceful Shutdown ---
     async def graceful_shutdown(sig: signal.Signals):
@@ -42,6 +44,8 @@ def _build(container: Container):
             _summarize_channels_task.cancel()
         if _backup_task.is_running():
             _backup_task.cancel()
+        if _debug_runner is not None:
+            await stop_debug_server(_debug_runner)
         await memory.close()
         await upload_db(container.settings.db_path)
         await bot.close()
@@ -348,7 +352,7 @@ def _build(container: Container):
 
     @bot.event
     async def on_ready():
-        nonlocal _ready_fired
+        nonlocal _ready_fired, _debug_runner
         # Download DB from Azure on first startup (if configured)
         if not _ready_fired and is_azure_configured():
             await download_db(container.settings.db_path)
@@ -364,6 +368,20 @@ def _build(container: Container):
             _summarize_channels_task.start()
             if is_azure_configured():
                 _backup_task.start()
+            # Debug server — only starts if token is set (fail-closed)
+            debug_token = container.settings.debug_token.get_secret_value()
+            if debug_token:
+                try:
+                    _debug_runner = await start_debug_server(
+                        memory=memory,
+                        debug_token=debug_token,
+                        host=container.settings.debug_host,
+                        port=container.settings.debug_port,
+                    )
+                except Exception:
+                    log.exception("debug_server_start_failed")
+            else:
+                log.info("debug_server_disabled", reason="DEBUG_TOKEN not set")
             _ready_fired = True
         log.info(
             "bot_ready",

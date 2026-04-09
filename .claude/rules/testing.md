@@ -5,6 +5,44 @@
 - Use DevTools to verify Discord interactions when possible: navigate to Discord web, inspect network requests, check console for errors
 - Prefer automated browser verification over manual "go check it" instructions
 
+## Debug HTTP Endpoint (read-only introspection)
+
+The bot exposes a read-only HTTP server (`insult/core/debug_server.py`) that Claude Code can hit directly to inspect state without needing the Discord MCP server.
+
+### Setup
+- Requires `DEBUG_TOKEN` in `.env` — fail-closed if unset (server does NOT start)
+- Generate: `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`
+- Defaults: `DEBUG_HOST=0.0.0.0`, `DEBUG_PORT=8787`
+- Auth: `Authorization: Bearer <token>` header on every endpoint except `/debug/health`
+
+### Endpoints
+| Method | Path | Query params | Returns |
+|--------|------|--------------|---------|
+| GET | `/debug/health` | — | `{"status": "ok"}` (no auth) |
+| GET | `/debug/messages` | `channel_id` (req), `limit` (1-500, default 15) | Last N messages for channel |
+| GET | `/debug/channels` | `guild_id` (req), `since_hours` (default 24) | Channel activity counts |
+| GET | `/debug/stats` | — | Total messages / users / channels |
+
+### How to use from Claude Code
+```bash
+# Load token from .env
+TOKEN=$(grep DEBUG_TOKEN .env | cut -d= -f2)
+
+# Read last 15 messages in a channel
+curl -s "http://localhost:8787/debug/messages?channel_id=123456&limit=15" \
+  -H "Authorization: Bearer $TOKEN" | jq .
+
+# List active channels in a guild in last 24h
+curl -s "http://localhost:8787/debug/channels?guild_id=99999&since_hours=24" \
+  -H "Authorization: Bearer $TOKEN" | jq .
+```
+
+### Notes
+- Read-only — no write paths
+- In Azure Container Apps: private by default (no ingress configured)
+- Uses `hmac.compare_digest` for timing-safe token comparison
+- For local testing, bot must be running (`python -m insult run`)
+
 ## E2E Testing with Discord MCP
 When you need to verify that the bot actually works end-to-end (not just unit tests), use the Discord MCP server to interact with a real Discord server. This Mac is the server.
 
