@@ -94,6 +94,12 @@ ANTI_PATTERN_CHECKS = [
     # Over-validation / excessive agreement
     re.compile(r"(?i)\b(absolutamente|absolutely)[.!]\s*(tienes|you'?re)\s*(razon|right)\b"),
     re.compile(r"(?i)\b(totalmente de acuerdo|couldn'?t agree more)\b"),
+    # Enthusiastic agreement — cheerleading opener patterns
+    re.compile(r"(?im)^¡?(Exacto|Órale|Claro|Chingón)\s*[,!\.].*¡"),
+    # Exclamation spam — 3+ separate ¡...! pairs in one response
+    re.compile(r"(?s)¡[^!]{2,}!.*¡[^!]{2,}!.*¡[^!]{2,}!"),
+    # Bold abuse — 3+ consecutive bold blocks
+    re.compile(r"\*\*[^*]+\*\*\s*\*\*[^*]+\*\*\s*\*\*[^*]+\*\*"),
     # Moralizing without tension — lecturing instead of challenging
     re.compile(r"(?i)\bit'?s important (to|that) (recognize|acknowledge|understand|remember)\b"),
     re.compile(r"(?i)\bes importante (reconocer|entender|recordar|tener en cuenta)\b"),
@@ -132,6 +138,80 @@ def sanitize(text: str) -> str:
     clean = [s for s in sentences if not any(p.search(s) for p in CHARACTER_BREAK_PATTERNS)]
     result = " ".join(clean).strip()
     return result if result else text
+
+
+# ---------------------------------------------------------------------------
+# Formatting normalizer — deterministic post-processor
+# ---------------------------------------------------------------------------
+
+_EXCL_MULTI = re.compile(r"!{2,}")  # !! or !!! → .
+_EXCL_PAIR = re.compile(r"¡([^!]*)!")  # ¡text! → text.
+
+
+def normalize_formatting(text: str) -> str:
+    """Enforce exclamation and bold limits deterministically.
+
+    Rules:
+    - Collapse !! / !!! → .
+    - Max 1 exclamation mark per response. First ¡...! pair survives;
+      subsequent pairs are deflated (¡ removed, ! → .).
+    - Max 2 bold blocks (**text**) per response. Excess blocks are
+      stripped of ** delimiters (text preserved).
+    """
+    if not text:
+        return text
+
+    # 1. Collapse multi-exclamation: !! → .  !!! → .
+    text = _EXCL_MULTI.sub(".", text)
+
+    # 2. Limit ¡...! pairs to max 1 per response
+    excl_count = 0
+
+    def _deflate_excl(m: re.Match) -> str:
+        nonlocal excl_count
+        excl_count += 1
+        if excl_count <= 1:
+            return m.group(0)  # keep first pair
+        # Deflate: remove ¡, replace ! with .
+        return m.group(1) + "."
+
+    text = _EXCL_PAIR.sub(_deflate_excl, text)
+
+    # 3. Handle remaining bare ! (not inside ¡...! pairs).
+    # After step 2, the only surviving ¡...! is the first pair. Any other !
+    # is bare (e.g. "Wow!") and counts against the budget.
+    remaining_budget = max(0, 1 - excl_count)
+    parts = list(text)
+    inside_inverted = False
+    bare_positions = []
+    for i, ch in enumerate(parts):
+        if ch == "\u00a1":  # ¡
+            inside_inverted = True
+        elif ch == "!" and inside_inverted:
+            inside_inverted = False  # closing of ¡...! pair — skip
+        elif ch == "!":
+            bare_positions.append(i)
+
+    for pos in bare_positions:
+        if remaining_budget > 0:
+            remaining_budget -= 1
+        else:
+            parts[pos] = "."
+    text = "".join(parts)
+
+    # 4. Limit bold blocks to max 2
+    bold_count = 0
+
+    def _limit_bold(m: re.Match) -> str:
+        nonlocal bold_count
+        bold_count += 1
+        if bold_count <= 2:
+            return m.group(0)
+        return m.group(1)  # strip ** delimiters, keep text
+
+    text = re.sub(r"\*\*([^*]+)\*\*", _limit_bold, text)
+
+    return text
 
 
 # ---------------------------------------------------------------------------

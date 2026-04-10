@@ -8,7 +8,14 @@ import structlog
 from anthropic.types import MessageParam
 
 from insult.core.actions import ToolCall
-from insult.core.character import CHARACTER_REINFORCEMENT, detect_anti_patterns, detect_break, sanitize, strip_metadata
+from insult.core.character import (
+    CHARACTER_REINFORCEMENT,
+    detect_anti_patterns,
+    detect_break,
+    normalize_formatting,
+    sanitize,
+    strip_metadata,
+)
 
 log = structlog.get_logger()
 
@@ -192,6 +199,12 @@ class LLMClient:
             from insult.core.language import language_cure
 
             response.text = await language_cure(self.client, self.cure_model, response.text)
+
+        # Step 7d: Formatting normalization — deterministic enforcement of
+        # exclamation limits (max 1) and bold limits (max 2). Runs LAST so
+        # neither the LLM nor the language cure can reintroduce violations.
+        if response.text:
+            response.text = normalize_formatting(response.text)
 
         if response.tool_calls:
             log.info("tool_calls_detected", tools=[tc.name for tc in response.tool_calls])

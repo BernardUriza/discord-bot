@@ -5,6 +5,7 @@ from insult.core.character import (
     build_adaptive_prompt,
     detect_anti_patterns,
     detect_break,
+    normalize_formatting,
     sanitize,
 )
 from insult.core.presets import PresetMode
@@ -215,3 +216,73 @@ class TestBuildAdaptivePrompt:
         )
         assert preset.mode == PresetMode.ARC
         assert "ARC" in prompt
+
+
+# --- Formatting Normalizer ---
+
+
+class TestNormalizeFormatting:
+    def test_empty_text(self):
+        assert normalize_formatting("") == ""
+
+    def test_no_exclamations_passes_through(self):
+        text = "Eso es interesante. Me quedo pensando."
+        assert normalize_formatting(text) == text
+
+    def test_collapses_double_exclamation(self):
+        assert "!!" not in normalize_formatting("No mames!!")
+        assert normalize_formatting("No mames!!") == "No mames."
+
+    def test_collapses_triple_exclamation(self):
+        assert normalize_formatting("Wow!!!") == "Wow."
+
+    def test_keeps_first_exclamation_pair(self):
+        text = "¡Eso estuvo bien!"
+        assert normalize_formatting(text) == "¡Eso estuvo bien!"
+
+    def test_deflates_second_exclamation_pair(self):
+        text = "¡Uno! ¡Dos! ¡Tres!"
+        result = normalize_formatting(text)
+        # First pair kept, rest deflated
+        assert result.count("!") == 1
+        assert "¡Uno!" in result
+        assert "Dos." in result
+        assert "Tres." in result
+
+    def test_keeps_max_two_bold_blocks(self):
+        text = "**Uno** y **dos** y **tres** y **cuatro**"
+        result = normalize_formatting(text)
+        assert result.count("**") == 4  # 2 blocks x 2 delimiters
+        assert "tres" in result  # text preserved
+        assert "cuatro" in result
+
+    def test_real_world_message(self):
+        """Regression test based on actual production message."""
+        text = (
+            "**¡Bernard! ¡Justo llegaste con la línea que cierra todo!**\n\n"
+            "**¡No se necesita ser erudito!** **¡Exacto, carnal!**\n\n"
+            "**¡Y lo de dejar de participar está cabrón!**"
+        )
+        result = normalize_formatting(text)
+        # Max 1 exclamation pair, max 2 bold blocks
+        assert result.count("!") <= 1
+        assert result.count("**") <= 4  # max 2 blocks
+
+    def test_preserves_question_marks(self):
+        text = "¿En serio? ¿Eso piensas?"
+        assert normalize_formatting(text) == text
+
+    def test_anti_pattern_enthusiastic_opener(self):
+        """Enthusiastic agreement opener should be detected."""
+        matches = detect_anti_patterns("¡Exacto! ¡Ahí está la clave!")
+        assert len(matches) > 0
+
+    def test_anti_pattern_bold_abuse(self):
+        """Three consecutive bolds should be detected."""
+        matches = detect_anti_patterns("**uno** **dos** **tres**")
+        assert len(matches) > 0
+
+    def test_anti_pattern_exclamation_spam(self):
+        """Three ¡...! pairs should be detected."""
+        matches = detect_anti_patterns("¡Uno! y ¡dos! y ¡tres!")
+        assert len(matches) > 0
