@@ -31,6 +31,44 @@ def memory_with_data():
             {"channel_id": "222", "channel_name": "random", "guild_id": "gid", "count": 10, "last_ts": 1699999000.0},
         ]
     )
+    mem.get_channel_reminders = AsyncMock(
+        return_value=[
+            {
+                "id": 1,
+                "channel_id": "111",
+                "guild_id": "gid",
+                "created_by": "user1",
+                "description": "comprar leche",
+                "remind_at": 1700100000.0,
+                "mention_user_ids": "",
+                "recurring": "none",
+            },
+        ]
+    )
+    mem.get_pending_reminders = AsyncMock(
+        return_value=[
+            {
+                "id": 1,
+                "channel_id": "111",
+                "guild_id": "gid",
+                "created_by": "user1",
+                "description": "comprar leche",
+                "remind_at": 1700100000.0,
+                "mention_user_ids": "",
+                "recurring": "none",
+            },
+            {
+                "id": 2,
+                "channel_id": "222",
+                "guild_id": "gid",
+                "created_by": "user2",
+                "description": "gym",
+                "remind_at": 1700200000.0,
+                "mention_user_ids": "user2",
+                "recurring": "daily",
+            },
+        ]
+    )
     return mem
 
 
@@ -147,3 +185,26 @@ async def test_channels_invalid_since_hours(client):
         "/debug/channels?guild_id=abc&since_hours=nope", headers={"Authorization": f"Bearer {TOKEN}"}
     )
     assert resp.status == 400
+
+
+async def test_reminders_all_pending(client, memory_with_data):
+    resp = await client.get("/debug/reminders", headers={"Authorization": f"Bearer {TOKEN}"})
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["count"] == 2
+    assert data["reminders"][0]["description"] == "comprar leche"
+    assert data["reminders"][1]["recurring"] == "daily"
+    memory_with_data.get_pending_reminders.assert_awaited_once()
+
+
+async def test_reminders_by_channel(client, memory_with_data):
+    resp = await client.get("/debug/reminders?channel_id=111", headers={"Authorization": f"Bearer {TOKEN}"})
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["count"] == 1
+    memory_with_data.get_channel_reminders.assert_awaited_once_with("111")
+
+
+async def test_reminders_requires_auth(client):
+    resp = await client.get("/debug/reminders")
+    assert resp.status == 401

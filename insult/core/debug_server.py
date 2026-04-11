@@ -110,6 +110,21 @@ async def _handle_stats(request: web.Request) -> web.Response:
     return web.json_response(stats)
 
 
+async def _handle_reminders(request: web.Request) -> web.Response:
+    memory = request.app[_MEMORY_KEY]
+    channel_id = request.query.get("channel_id")
+
+    if channel_id:
+        reminders = await memory.get_channel_reminders(channel_id)
+    else:
+        # All pending reminders across all channels
+        import time as _time
+
+        reminders = await memory.get_pending_reminders(_time.time() + 86400 * 365)  # 1yr horizon
+
+    return web.json_response({"count": len(reminders), "reminders": reminders})
+
+
 def build_app(memory: MemoryStore, debug_token: str) -> web.Application:
     """Construct the aiohttp Application with routes and middleware."""
     app = web.Application(middlewares=[_auth_middleware])
@@ -119,6 +134,7 @@ def build_app(memory: MemoryStore, debug_token: str) -> web.Application:
     app.router.add_get("/debug/messages", _handle_messages)
     app.router.add_get("/debug/channels", _handle_channels)
     app.router.add_get("/debug/stats", _handle_stats)
+    app.router.add_get("/debug/reminders", _handle_reminders)
     return app
 
 
