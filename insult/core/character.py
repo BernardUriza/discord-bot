@@ -39,6 +39,13 @@ CHARACTER_BREAK_PATTERNS = [
     re.compile(r"(?i)\bI don'?t have (feelings|emotions|consciousness)\b"),
     re.compile(r"(?i)\bIt'?s important to note that\b"),
     re.compile(r"(?i)\bIn summary\b"),
+    # Fix #1: Self-referential identity leaks ("soy más que un bot")
+    re.compile(r"(?i)\b(soy|como)\s+(un\s+)?(bot|chatbot|programa|software)\b"),
+    re.compile(r"(?i)\bm[aá]s que un\s+(bot|chatbot|asistente|programa)\b"),
+    re.compile(r"(?i)\b(no soy|soy solo)\s+(un\s+)?(bot|programa|herramienta)\b"),
+    # Meta-awareness leaks ("my training", "my programming", "I was designed")
+    re.compile(r"(?i)\b(mi|my)\s+(entrenamiento|training|programaci[oó]n|programming)\b"),
+    re.compile(r"(?i)\b(fu[ií]|was)\s+(dise[nñ]ado|programado|designed|trained)\s+(para|to)\b"),
 ]
 
 CHARACTER_REINFORCEMENT = (
@@ -103,6 +110,11 @@ ANTI_PATTERN_CHECKS = [
     # Moralizing without tension — lecturing instead of challenging
     re.compile(r"(?i)\bit'?s important (to|that) (recognize|acknowledge|understand|remember)\b"),
     re.compile(r"(?i)\bes importante (reconocer|entender|recordar|tener en cuenta)\b"),
+    # Fix #5: Pseudo-clinical claims — bot playing doctor/pharmacist
+    re.compile(r"(?i)\b(tu cerebro|your brain)\s+(necesita|needs|est[aá]|is)\s+(encontrando|finding|en modo)\b"),
+    re.compile(r"(?i)\b(qu[ií]mica|chemistry)\s*[>>=]\s*(psicolog[ií]a|psychology)\b"),
+    re.compile(r"(?i)\b(desregulaci[oó]n|dysregulation)\s+(masiva|massive|neurol[oó]gica)\b"),
+    re.compile(r"(?i)\b(recuperaci[oó]n qu[ií]mica|chemical recovery)\s+(funcionando|working)\b"),
     # Language consistency — full English sentences when bot should speak Spanish
     # Detects sentences starting with common English patterns (5+ words)
     re.compile(
@@ -215,6 +227,74 @@ def normalize_formatting(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Fix #4: Opener deduplication
+# ---------------------------------------------------------------------------
+
+
+def get_length_hint(recent_lengths: list[int]) -> str:
+    """Generate a length variation hint when recent responses are too uniform.
+
+    If the last 3+ responses are all in the 80-220 word range (medium),
+    inject a directive to break the pattern.
+    """
+    if len(recent_lengths) < 3:
+        return ""
+    last3 = recent_lengths[-3:]
+    if all(80 < wc < 220 for wc in last3):
+        import random
+
+        target = random.choice(["micro", "short", "long"])
+        hints = {
+            "micro": (
+                "## Length Alert\n"
+                "Your last 3 responses were all medium-length (~150 words). "
+                "THIS response must be UNDER 20 words. One sentence max. Hit hard and shut up."
+            ),
+            "short": (
+                "## Length Alert\n"
+                "Your last 3 responses were all similar length. "
+                "THIS response must be 2-3 sentences max. Be terse."
+            ),
+            "long": (
+                "## Length Alert\n"
+                "Your last 3 responses were all similar length. "
+                "If the topic earns it, go DEEP — 250+ words."
+            ),
+        }
+        return hints[target]
+    return ""
+
+
+def _extract_opener_name(line: str) -> str:
+    """Extract the leading name from an opener like '¡BERNARD! ...' → 'bernard'."""
+    cleaned = re.sub(r"^[¡!¿?*\s]+", "", line)
+    # Take first word (the name), lowercase
+    match = re.match(r"([A-Za-záéíóúñÁÉÍÓÚÑ]+)", cleaned)
+    return match.group(1).lower() if match else ""
+
+
+def deduplicate_opener(text: str, recent_openers: list[str]) -> str:
+    """If opener starts with the same name as recent ones, strip the first line."""
+    if not text or not recent_openers:
+        return text
+
+    first_line = text.split("\n")[0]
+    name = _extract_opener_name(first_line)
+    if not name or len(name) < 3:
+        return text
+
+    for prev in recent_openers[-5:]:
+        prev_name = _extract_opener_name(prev)
+        if prev_name and name == prev_name:
+            # Same name opener detected — strip the first line
+            rest = text[len(first_line) :].lstrip("\n")
+            if rest:
+                return rest
+            break
+    return text
+
+
+# ---------------------------------------------------------------------------
 # Metadata stripping
 # ---------------------------------------------------------------------------
 
@@ -292,6 +372,7 @@ def build_adaptive_prompt(
     user_facts: list[dict] | None = None,
     flow_analysis: FlowAnalysis | None = None,
     server_pulse: str = "",
+    recent_response_lengths: list[int] | None = None,
 ) -> tuple[str, PresetSelection]:
     """Compose system prompt using layered architecture:
 
@@ -383,6 +464,26 @@ def build_adaptive_prompt(
         if adaptations:
             prompt += "\n\n## User Adaptation (adjust your style, NOT your identity)\n"
             prompt += "\n".join(f"- {a}" for a in adaptations)
+
+    # --- Fix #2: Anti-sycophancy — detect sustained agreement ---
+    if recent_messages and len(recent_messages) >= 4:
+        # Check last 2 assistant messages for agreement patterns
+        assistant_msgs = [m for m in recent_messages if m["role"] == "assistant"][-2:]
+        agreement_words = re.compile(r"(?i)\b(exacto|exactamente|tienes raz[oó]n|correcto|s[ií] carnal|bien dicho)\b")
+        agreements = sum(1 for m in assistant_msgs if agreement_words.search(m.get("content", "")))
+        if agreements >= 2:
+            prompt += (
+                "\n\n## Anti-Sycophancy Alert\n"
+                "You have AGREED with the user's last 2 messages. Your NEXT response MUST contain "
+                "a counter-argument, a hole in their logic, or a question that forces them to defend "
+                "their position. Sustained agreement is character death for Insult."
+            )
+
+    # --- Fix #3: Length variation hint ---
+    if recent_response_lengths:
+        hint = get_length_hint(recent_response_lengths)
+        if hint:
+            prompt += f"\n\n{hint}"
 
     # --- Identity reinforcement for long conversations ---
     if context_len >= IDENTITY_REINFORCE_THRESHOLD:

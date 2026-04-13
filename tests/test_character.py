@@ -3,8 +3,10 @@
 from insult.core.character import (
     IDENTITY_REINFORCE_THRESHOLD,
     build_adaptive_prompt,
+    deduplicate_opener,
     detect_anti_patterns,
     detect_break,
+    get_length_hint,
     normalize_formatting,
     sanitize,
 )
@@ -286,3 +288,80 @@ class TestNormalizeFormatting:
         """Three ¡...! pairs should be detected."""
         matches = detect_anti_patterns("¡Uno! y ¡dos! y ¡tres!")
         assert len(matches) > 0
+
+    def test_anti_pattern_pseudo_clinical(self):
+        """Pseudo-clinical claims about brain chemistry should be detected."""
+        matches = detect_anti_patterns("Tu cerebro está encontrando equilibrio")
+        assert len(matches) > 0
+
+    def test_anti_pattern_chemistry_over_psychology(self):
+        matches = detect_anti_patterns("Química > psicología, carnal")
+        assert len(matches) > 0
+
+
+# --- Fix #1: Identity Leak Detection ---
+
+
+class TestIdentityLeakPatterns:
+    def test_detects_bot_self_reference(self):
+        assert detect_break("reconoces que soy más que un bot respondiendo")
+
+    def test_detects_soy_un_chatbot(self):
+        assert detect_break("como un chatbot que aprende")
+
+    def test_detects_my_training(self):
+        assert detect_break("mi entrenamiento me permite hacer esto")
+
+    def test_detects_fui_programado(self):
+        assert detect_break("fui programado para ayudar")
+
+    def test_clean_bot_reference_in_other_context(self):
+        """References to bots in general (not self) should NOT trigger."""
+        assert not detect_break("los bots de Discord son útiles")
+
+
+# --- Fix #3: Length Variation ---
+
+
+class TestLengthHint:
+    def test_no_hint_when_few_responses(self):
+        assert get_length_hint([100, 150]) == ""
+
+    def test_no_hint_when_varied(self):
+        assert get_length_hint([30, 150, 300]) == ""
+
+    def test_hint_when_uniform_medium(self):
+        hint = get_length_hint([140, 155, 160])
+        assert "Length Alert" in hint
+
+    def test_no_hint_when_already_varied(self):
+        assert get_length_hint([20, 150, 50]) == ""
+
+
+# --- Fix #4: Opener Deduplication ---
+
+
+class TestDeduplicateOpener:
+    def test_no_change_when_no_recent(self):
+        assert deduplicate_opener("¡BERNARD! Hola", []) == "¡BERNARD! Hola"
+
+    def test_strips_duplicate_opener(self):
+        result = deduplicate_opener(
+            "¡BERNARD! Otra vez aquí\nSegunda línea",
+            ["¡BERNARD! Primera vez"],
+        )
+        assert not result.startswith("¡BERNARD!")
+        assert "Segunda línea" in result
+
+    def test_keeps_different_opener(self):
+        result = deduplicate_opener(
+            "Órale, qué interesante\nMás texto",
+            ["¡BERNARD! Primera vez"],
+        )
+        assert result.startswith("Órale")
+
+    def test_handles_single_line(self):
+        """If stripping opener leaves empty, keep original."""
+        result = deduplicate_opener("¡BERNARD! Solo esto", ["¡BERNARD! Algo"])
+        # Single line — stripping leaves empty, so keep original
+        assert result == "¡BERNARD! Solo esto"

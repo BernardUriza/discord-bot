@@ -18,7 +18,7 @@ from insult.core.actions import (
     execute_get_channel_info,
 )
 from insult.core.attachments import process_attachments
-from insult.core.character import build_adaptive_prompt
+from insult.core.character import build_adaptive_prompt, deduplicate_opener
 from insult.core.delivery import MESSAGE_DELIMITER, send_response
 from insult.core.errors import classify_error, get_error_response
 from insult.core.facts import build_facts_prompt, extract_facts
@@ -231,6 +231,9 @@ class ChatCog(commands.Cog):
             except Exception:
                 log.exception("chat_server_pulse_failed", guild_id=str(message.guild.id))
 
+        # Compute recent response lengths for Fix #3 (length variation hint)
+        recent_response_lengths = [len(m.get("content", "").split()) for m in recent if m["role"] == "assistant"][-5:]
+
         # Run flow analysis (depends on preset, so build_adaptive_prompt goes first)
         context_key = f"{channel_id}:{user_id}"
         # First pass: get preset from build_adaptive_prompt
@@ -242,6 +245,7 @@ class ChatCog(commands.Cog):
             recent_messages=recent,
             user_facts=user_facts,
             server_pulse=server_pulse,
+            recent_response_lengths=recent_response_lengths,
         )
         # Run 4-flow behavioral analysis
         flow_analysis = analyze_flows(text, recent, preset, self._expression_history, context_key)
@@ -281,6 +285,10 @@ class ChatCog(commands.Cog):
             return
 
         response = llm_response.text
+
+        # Fix #4: Opener deduplication — strip repetitive openers
+        recent_openers = [m["content"].split("\n")[0] for m in recent if m["role"] == "assistant"][-5:]
+        response = deduplicate_opener(response, recent_openers)
 
         # Extract and strip emoji reactions
         reactions = parse_reactions(response)
