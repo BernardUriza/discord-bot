@@ -36,6 +36,13 @@ def mock_memory():
     mem.update_reminder_time = AsyncMock()
     mem.get_channel_reminders = AsyncMock(return_value=[])
     mem.delete_reminder = AsyncMock(return_value=True)
+    # Phase 1 (v3.0.0): disclosure, arcs, stances, contradictions
+    mem.store_disclosure = AsyncMock()
+    mem.get_arc = AsyncMock(return_value=None)
+    mem.upsert_arc = AsyncMock()
+    mem.store_stance = AsyncMock()
+    mem.get_stances = AsyncMock(return_value=[])
+    mem.store_contradiction = AsyncMock()
     return mem
 
 

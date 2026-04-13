@@ -129,6 +129,71 @@ class MemoryStore:
             CREATE INDEX IF NOT EXISTS idx_reminders_pending
             ON reminders(delivered, remind_at)
         """)
+
+        # --- Phase 1 tables (v3.0.0): disclosure, emotional arcs, stance, contradictions ---
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS disclosure_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                category TEXT NOT NULL,
+                severity INTEGER NOT NULL,
+                signals TEXT NOT NULL,
+                message_excerpt TEXT NOT NULL,
+                timestamp REAL NOT NULL
+            )
+        """)
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_disclosure_user
+            ON disclosure_log(user_id, timestamp DESC)
+        """)
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS emotional_arcs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                phase_since REAL NOT NULL,
+                crisis_depth INTEGER NOT NULL DEFAULT 0,
+                recovery_signals INTEGER NOT NULL DEFAULT 0,
+                turns_in_phase INTEGER NOT NULL DEFAULT 0,
+                updated_at REAL NOT NULL
+            )
+        """)
+        await self._db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_arc_user_channel
+            ON emotional_arcs(channel_id, user_id)
+        """)
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS stance_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                position TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                timestamp REAL NOT NULL
+            )
+        """)
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_stance_channel_user
+            ON stance_log(channel_id, user_id, timestamp DESC)
+        """)
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS contradiction_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                prior_statement TEXT NOT NULL,
+                contradicting_statement TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                called_out INTEGER NOT NULL DEFAULT 0,
+                timestamp REAL NOT NULL
+            )
+        """)
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_contradiction_user
+            ON contradiction_log(user_id, timestamp DESC)
+        """)
         await self._db.commit()
 
         # Initialize vector search (sqlite-vec + FTS5)
@@ -713,3 +778,111 @@ class MemoryStore:
         except aiosqlite.Error as e:
             log.error("reminder_delete_failed", reminder_id=reminder_id, error=str(e))
             return False
+
+    # --- Disclosure Log (v3.0.0) ---
+
+    async def store_disclosure(
+        self, channel_id: str, user_id: str, category: str, severity: int, signals: str, excerpt: str
+    ) -> None:
+        await self._ensure_connection()
+        try:
+            await self._db.execute(
+                "INSERT INTO disclosure_log (channel_id, user_id, category, severity, signals, message_excerpt, timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (channel_id, user_id, category, severity, signals, excerpt[:200], time.time()),
+            )
+            await self._db.commit()
+        except aiosqlite.Error as e:
+            log.error("disclosure_store_failed", error=str(e))
+
+    # --- Emotional Arcs (v3.0.0) ---
+
+    async def get_arc(self, channel_id: str, user_id: str) -> dict | None:
+        await self._ensure_connection()
+        cursor = await self._db.execute(
+            "SELECT phase, phase_since, crisis_depth, recovery_signals, turns_in_phase, updated_at "
+            "FROM emotional_arcs WHERE channel_id = ? AND user_id = ?",
+            (channel_id, user_id),
+        )
+        row = await cursor.fetchone()
+        if row:
+            return {
+                "phase": row[0],
+                "phase_since": row[1],
+                "crisis_depth": row[2],
+                "recovery_signals": row[3],
+                "turns_in_phase": row[4],
+                "updated_at": row[5],
+            }
+        return None
+
+    async def upsert_arc(
+        self,
+        channel_id: str,
+        user_id: str,
+        phase: str,
+        phase_since: float,
+        crisis_depth: int,
+        recovery_signals: int,
+        turns_in_phase: int,
+    ) -> None:
+        await self._ensure_connection()
+        try:
+            await self._db.execute(
+                "INSERT INTO emotional_arcs (channel_id, user_id, phase, phase_since, crisis_depth, "
+                "recovery_signals, turns_in_phase, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(channel_id, user_id) DO UPDATE SET phase=excluded.phase, "
+                "phase_since=excluded.phase_since, crisis_depth=excluded.crisis_depth, "
+                "recovery_signals=excluded.recovery_signals, turns_in_phase=excluded.turns_in_phase, "
+                "updated_at=excluded.updated_at",
+                (channel_id, user_id, phase, phase_since, crisis_depth, recovery_signals, turns_in_phase, time.time()),
+            )
+            await self._db.commit()
+        except aiosqlite.Error as e:
+            log.error("arc_upsert_failed", error=str(e))
+
+    # --- Stance Log (v3.0.0) ---
+
+    async def store_stance(self, channel_id: str, user_id: str, topic: str, position: str, confidence: float) -> None:
+        await self._ensure_connection()
+        try:
+            await self._db.execute(
+                "INSERT INTO stance_log (channel_id, user_id, topic, position, confidence, timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (channel_id, user_id, topic, position[:200], confidence, time.time()),
+            )
+            await self._db.commit()
+            # FIFO eviction: keep max 20 per context
+            await self._db.execute(
+                "DELETE FROM stance_log WHERE id NOT IN ("
+                "SELECT id FROM stance_log WHERE channel_id = ? AND user_id = ? "
+                "ORDER BY timestamp DESC LIMIT 20)",
+                (channel_id, user_id),
+            )
+            await self._db.commit()
+        except aiosqlite.Error as e:
+            log.error("stance_store_failed", error=str(e))
+
+    async def get_stances(self, channel_id: str, user_id: str, limit: int = 5) -> list[dict]:
+        await self._ensure_connection()
+        cursor = await self._db.execute(
+            "SELECT topic, position, confidence, timestamp FROM stance_log "
+            "WHERE channel_id = ? AND user_id = ? ORDER BY timestamp DESC LIMIT ?",
+            (channel_id, user_id, limit),
+        )
+        rows = await cursor.fetchall()
+        return [{"topic": r[0], "position": r[1], "confidence": r[2], "timestamp": r[3]} for r in rows]
+
+    # --- Contradiction Log (v3.0.0) ---
+
+    async def store_contradiction(self, user_id: str, prior: str, contradicting: str, topic: str) -> None:
+        await self._ensure_connection()
+        try:
+            await self._db.execute(
+                "INSERT INTO contradiction_log (user_id, prior_statement, contradicting_statement, "
+                "topic, called_out, timestamp) VALUES (?, ?, ?, ?, 0, ?)",
+                (user_id, prior[:300], contradicting[:300], topic, time.time()),
+            )
+            await self._db.commit()
+        except aiosqlite.Error as e:
+            log.error("contradiction_store_failed", error=str(e))

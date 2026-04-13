@@ -17,9 +17,11 @@ from insult.core.actions import (
     execute_edit_channel,
     execute_get_channel_info,
 )
+from insult.core.arc_tracker import ArcState, arc_from_dict, arc_to_dict, build_arc_prompt, update_arc
 from insult.core.attachments import process_attachments
 from insult.core.character import build_adaptive_prompt, deduplicate_opener
 from insult.core.delivery import MESSAGE_DELIMITER, send_response
+from insult.core.disclosure import scan_disclosure
 from insult.core.errors import classify_error, get_error_response
 from insult.core.facts import build_facts_prompt, extract_facts
 from insult.core.flows import ExpressionHistory, analyze_flows, build_flow_prompt, validate_flow_adherence
@@ -231,6 +233,24 @@ class ChatCog(commands.Cog):
             except Exception:
                 log.exception("chat_server_pulse_failed", guild_id=str(message.guild.id))
 
+        # --- Phase 1 (v3.0.0): Pre-LLM disclosure scan ---
+        disclosure = scan_disclosure(text)
+        if disclosure.detected:
+            import json as _json
+
+            await self.memory.store_disclosure(
+                channel_id,
+                user_id,
+                disclosure.category,
+                disclosure.severity,
+                _json.dumps(disclosure.signals),
+                text[:200],
+            )
+
+        # --- Phase 1 (v3.0.0): Load emotional arc state ---
+        arc_data = await self.memory.get_arc(channel_id, user_id)
+        arc_state = arc_from_dict(arc_data) if arc_data else ArcState()
+
         # Compute recent response lengths for Fix #3 (length variation hint)
         recent_response_lengths = [len(m.get("content", "").split()) for m in recent if m["role"] == "assistant"][-5:]
 
@@ -253,6 +273,19 @@ class ChatCog(commands.Cog):
         flow_prompt = build_flow_prompt(flow_analysis)
         if flow_prompt:
             system_prompt += f"\n\n{flow_prompt}"
+
+        # --- Phase 1 (v3.0.0): Inject arc + stance guidance ---
+        arc_prompt = build_arc_prompt(arc_state)
+        if arc_prompt:
+            system_prompt += f"\n\n{arc_prompt}"
+        stances = await self.memory.get_stances(channel_id, user_id, limit=5)
+        if stances:
+            from insult.core.stance_log import build_stance_prompt
+
+            stance_prompt = build_stance_prompt(stances)
+            if stance_prompt:
+                system_prompt += f"\n\n{stance_prompt}"
+
         system_prompt += build_facts_prompt(user_name, user_facts)
 
         if profile and profile.is_confident:
@@ -309,6 +342,33 @@ class ChatCog(commands.Cog):
             )
         except Exception:
             log.exception("chat_store_response_failed", channel_id=channel_id)
+
+        # --- Phase 1 (v3.0.0): Update arc state + extract stances ---
+        new_arc = update_arc(
+            arc_state,
+            disclosure_severity=disclosure.severity,
+            user_state=flow_analysis.pressure.detected_state.value,
+            preset_mode=preset.mode.value,
+        )
+        arc_dict = arc_to_dict(new_arc)
+        await self.memory.upsert_arc(
+            channel_id,
+            user_id,
+            arc_dict["phase"],
+            arc_dict["phase_since"],
+            arc_dict["crisis_depth"],
+            arc_dict["recovery_signals"],
+            arc_dict["turns_in_phase"],
+        )
+        # Extract and store stances from bot response (background-safe)
+        if clean_response and flow_analysis.epistemic.assertion_density >= 0.4:
+            from insult.core.stance_log import extract_stances
+
+            extraction = extract_stances(
+                clean_response, flow_analysis.epistemic.assertion_density, __import__("time").time()
+            )
+            for entry in extraction.entries:
+                await self.memory.store_stance(channel_id, user_id, entry.topic, entry.position, entry.confidence)
 
         # Fire background tasks: reactions, fact extraction
         if reactions:
