@@ -227,6 +227,81 @@ def normalize_formatting(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Bullet/list stripper — convert AI-formatted lists to prose
+# ---------------------------------------------------------------------------
+
+_NUMBERED_LIST = re.compile(r"(?m)^\d+[\.\)]\s+(.+)$")
+_BULLET_LIST = re.compile(r"(?m)^[-\*•]\s+(.+)$")
+
+
+def strip_lists(text: str) -> str:
+    """Convert numbered/bullet lists to inline prose.
+
+    '1. First thing\\n2. Second thing\\n3. Third thing'
+    becomes 'First thing. Second thing. Third thing.'
+    """
+    if not text:
+        return text
+
+    # Count list items — only transform if there are 2+ consecutive
+    numbered_items = _NUMBERED_LIST.findall(text)
+    bullet_items = _BULLET_LIST.findall(text)
+
+    if len(numbered_items) >= 2:
+        # Replace numbered list with prose
+        def _numbered_to_prose(m: re.Match) -> str:
+            return m.group(1).rstrip(".") + "."
+
+        text = _NUMBERED_LIST.sub(_numbered_to_prose, text)
+
+    if len(bullet_items) >= 2:
+
+        def _bullet_to_prose(m: re.Match) -> str:
+            return m.group(1).rstrip(".") + "."
+
+        text = _BULLET_LIST.sub(_bullet_to_prose, text)
+
+    # Clean up excessive blank lines left by list removal
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Length enforcer — mechanical variation when prompt hints fail
+# ---------------------------------------------------------------------------
+
+
+def enforce_length_variation(text: str, recent_lengths: list[int]) -> str:
+    """Mechanically enforce length variation when 3+ consecutive responses are medium.
+
+    If the last 3 responses were all 80-200 words, truncate to first 2 sentences
+    (forcing a short response). This is the nuclear option — the prompt-based
+    length hint clearly doesn't work, so we enforce mechanically.
+    """
+    if not text or len(recent_lengths) < 3:
+        return text
+
+    last3 = recent_lengths[-3:]
+    if not all(80 < wc < 200 for wc in last3):
+        return text  # varied enough, no intervention
+
+    # Force short: keep only first 2 sentences
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    if len(sentences) <= 2:
+        return text  # already short
+
+    truncated = " ".join(sentences[:2])
+
+    log.info(
+        "length_enforced",
+        original_words=len(text.split()),
+        truncated_words=len(truncated.split()),
+        recent_lengths=last3,
+    )
+    return truncated
+
+
+# ---------------------------------------------------------------------------
 # Fix #4: Opener deduplication
 # ---------------------------------------------------------------------------
 

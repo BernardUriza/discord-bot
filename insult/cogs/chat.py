@@ -19,7 +19,7 @@ from insult.core.actions import (
 )
 from insult.core.arc_tracker import ArcState, arc_from_dict, arc_to_dict, build_arc_prompt, update_arc
 from insult.core.attachments import process_attachments
-from insult.core.character import build_adaptive_prompt, deduplicate_opener
+from insult.core.character import build_adaptive_prompt, deduplicate_opener, enforce_length_variation
 from insult.core.delivery import MESSAGE_DELIMITER, send_response
 from insult.core.disclosure import scan_disclosure
 from insult.core.errors import classify_error, get_error_response
@@ -318,6 +318,9 @@ class ChatCog(commands.Cog):
             return
 
         response = llm_response.text
+
+        # Length enforcer — truncate if 3+ consecutive mediums
+        response = enforce_length_variation(response, recent_response_lengths)
 
         # Fix #4: Opener deduplication — strip repetitive openers
         recent_openers = [m["content"].split("\n")[0] for m in recent if m["role"] == "assistant"][-5:]

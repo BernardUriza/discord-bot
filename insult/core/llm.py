@@ -14,6 +14,7 @@ from insult.core.character import (
     detect_break,
     normalize_formatting,
     sanitize,
+    strip_lists,
     strip_metadata,
 )
 
@@ -213,6 +214,7 @@ class LLMClient:
         # neither the LLM nor the language cure can reintroduce violations.
         if response.text:
             response.text = normalize_formatting(response.text)
+            response.text = strip_lists(response.text)
 
         if response.tool_calls:
             log.info("tool_calls_detected", tools=[tc.name for tc in response.tool_calls])

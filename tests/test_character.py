@@ -6,9 +6,11 @@ from insult.core.character import (
     deduplicate_opener,
     detect_anti_patterns,
     detect_break,
+    enforce_length_variation,
     get_length_hint,
     normalize_formatting,
     sanitize,
+    strip_lists,
 )
 from insult.core.presets import PresetMode
 from insult.core.style import UserStyleProfile
@@ -365,3 +367,66 @@ class TestDeduplicateOpener:
         result = deduplicate_opener("¡BERNARD! Solo esto", ["¡BERNARD! Algo"])
         # Single line — stripping leaves empty, so keep original
         assert result == "¡BERNARD! Solo esto"
+
+
+# --- Strip Lists ---
+
+
+class TestStripLists:
+    def test_empty(self):
+        assert strip_lists("") == ""
+
+    def test_no_lists(self):
+        text = "Esto es prosa normal. Sin listas."
+        assert strip_lists(text) == text
+
+    def test_numbered_list(self):
+        text = "Opciones:\n1. Primera cosa\n2. Segunda cosa\n3. Tercera cosa"
+        result = strip_lists(text)
+        assert "1." not in result
+        assert "Primera cosa." in result
+        assert "Segunda cosa." in result
+
+    def test_bullet_list(self):
+        text = "Puntos:\n- Primer punto\n- Segundo punto\n- Tercer punto"
+        result = strip_lists(text)
+        assert "- " not in result
+        assert "Primer punto." in result
+
+    def test_single_item_not_stripped(self):
+        """Single list item should not be transformed."""
+        text = "Solo esto:\n1. Una sola cosa"
+        assert strip_lists(text) == text
+
+    def test_preserves_non_list_dashes(self):
+        text = "No es lista - es guion normal."
+        assert strip_lists(text) == text
+
+
+# --- Length Enforcer ---
+
+
+class TestEnforceLengthVariation:
+    def test_no_history(self):
+        text = "A " * 100
+        assert enforce_length_variation(text, []) == text
+
+    def test_varied_history_no_truncation(self):
+        text = "Sentence one. Sentence two. Sentence three. Sentence four."
+        assert enforce_length_variation(text, [30, 150, 250]) == text
+
+    def test_uniform_medium_truncates(self):
+        text = "First sentence here. Second sentence here. Third sentence. Fourth sentence. Fifth."
+        result = enforce_length_variation(text, [120, 140, 130])
+        sentences = [s for s in result.split(". ") if s]
+        assert len(sentences) <= 3  # truncated to ~2 sentences
+
+    def test_already_short_not_truncated(self):
+        text = "Short one. Two."
+        assert enforce_length_variation(text, [120, 140, 130]) == text
+
+    def test_threshold_boundary(self):
+        """Exactly 80 or 200 should NOT trigger (exclusive bounds)."""
+        text = "A. B. C. D. E."
+        assert enforce_length_variation(text, [80, 150, 130]) == text  # 80 is not > 80
+        assert enforce_length_variation(text, [200, 150, 130]) == text  # 200 is not < 200

@@ -1,5 +1,24 @@
 # Testing Rules
 
+## Pre-Push Verification — MANDATORY
+
+Before EVERY push, verify that code actually works at the Python import level, not just at the lint/test level:
+
+1. **SDK class existence**: If you reference a new exception class, enum, or attribute from an external SDK (e.g., `anthropic.OverloadedError`), ALWAYS verify it exists first:
+   ```bash
+   python3 -c "import anthropic; print(hasattr(anthropic, 'OverloadedError'))"
+   ```
+   `ruff check` and `pytest` may pass even when the class doesn't exist (if the import is inside a try/except or conditional path). Only a live import test catches this.
+
+2. **Real import smoke test**: After adding imports from external packages, verify the module loads:
+   ```bash
+   python3 -c "from insult.core.llm import LLMClient; print('OK')"
+   ```
+
+3. **Never assume SDK APIs exist**: Always check `dir(module)` or `hasattr(module, 'ClassName')` before using a class you haven't used before in this codebase.
+
+4. **If CI fails, don't just re-push with a guess**: Read the CI error, reproduce it locally, then fix with verification.
+
 ## Browser Testing
 - Always test the bot's web-facing features using Chrome DevTools (via MCP chrome-devtools)
 - Use DevTools to verify Discord interactions when possible: navigate to Discord web, inspect network requests, check console for errors
