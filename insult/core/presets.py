@@ -459,9 +459,17 @@ def classify_preset(
     )
 
 
+_VALUE_MOVE_DIRECTIVE = (
+    "## Value Move (applies to ALL modes)\n"
+    "Every response must do at least one: clarify, deepen, challenge, or discover. "
+    "If it does none, it is noise. Never paraphrase what the user already made clear "
+    "unless you are compressing, sharpening, reframing, or exposing something hidden."
+)
+
+
 def build_preset_prompt(selection: PresetSelection) -> str:
     """Build the preset guidance section for injection into system prompt."""
-    parts = [PRESET_GUIDANCE[selection.mode]]
+    parts = [PRESET_GUIDANCE[selection.mode], _VALUE_MOVE_DIRECTIVE]
     for modifier in selection.modifiers:
         guidance = MODIFIER_GUIDANCE.get(modifier, "")
         if guidance:

@@ -528,3 +528,59 @@ class TestFlowAdherence:
         analysis = self._make_analysis(ResponseShape.ONE_HIT)
         result = validate_flow_adherence("A. B. C. D. E.", analysis)
         assert result["adherence_score"] < 1.0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 2 Enhancements
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestPhase2Enhancements:
+    def test_expressive_thinking_shape_exists(self):
+        assert ResponseShape.EXPRESSIVE_THINKING == "expressive_thinking"
+
+    def test_rapid_fire_shape_exists(self):
+        assert ResponseShape.RAPID_FIRE == "rapid_fire"
+
+    def test_contradiction_callback_shape_exists(self):
+        assert ResponseShape.CONTRADICTION_CALLBACK == "contradiction_callback"
+
+    def test_metaphorical_flavor_exists(self):
+        assert StyleFlavor.METAPHORICAL == "metaphorical"
+
+    def test_expressive_mode_activates(self):
+        from unittest.mock import patch
+
+        pressure = PressureAnalysis(
+            detected_state=UserState.NEUTRAL,
+            state_confidence=0.5,
+            pressure_level=2,
+            pressure_reason="test",
+            clamped_by_preset=False,
+        )
+        epistemic = EpistemicAnalysis(0.0, 0.0, 0.0, False, 0, EpistemicMove.NONE, "test")
+        # A message that hits no special branches (medium word count, default preset)
+        msg = "pues no se que pensar de todo esto la verdad"
+        with patch("insult.core.flows.random.random", return_value=0.1):
+            shape, reason, _ = _select_shape(msg, _preset(), pressure, epistemic, [])
+        assert shape == ResponseShape.EXPRESSIVE_THINKING
+        assert "expressive_mode" in reason
+
+    def test_agreement_streak_computed(self):
+        h = ExpressionHistory()
+        recent = [
+            {"role": "assistant", "content": "Pues algo distinto aquí."},
+            {"role": "assistant", "content": "Exacto, tienes razón carnal."},
+            {"role": "assistant", "content": "Totalmente, bien dicho."},
+        ]
+        result = analyze_flows("hola", recent, _preset(), h, "test_streak")
+        assert result.agreement_streak == 2
+
+    def test_agreement_streak_zero_when_no_agreement(self):
+        h = ExpressionHistory()
+        recent = [
+            {"role": "assistant", "content": "No estoy de acuerdo."},
+            {"role": "assistant", "content": "Eso no tiene sentido."},
+        ]
+        result = analyze_flows("hola", recent, _preset(), h, "test_streak_zero")
+        assert result.agreement_streak == 0

@@ -15,6 +15,7 @@ Each flow logs a structured telemetry event for observability.
 
 from __future__ import annotations
 
+import random
 import re
 import time
 from collections import deque
@@ -26,6 +27,8 @@ import structlog
 from insult.core.presets import PresetMode, PresetSelection
 
 log = structlog.get_logger()
+
+_AGREEMENT_RE = re.compile(r"(?i)\b(exacto|exactamente|tienes raz[oó]n|correcto|s[ií] carnal|bien dicho|totalmente)\b")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Enums
@@ -58,6 +61,9 @@ class ResponseShape(StrEnum):
     LAYERED = "layered"
     PROBING = "probing"
     DENSE_CRITIQUE = "dense_critique"
+    EXPRESSIVE_THINKING = "expressive_thinking"
+    RAPID_FIRE = "rapid_fire"
+    CONTRADICTION_CALLBACK = "contradiction_callback"
 
 
 class StyleFlavor(StrEnum):
@@ -68,6 +74,7 @@ class StyleFlavor(StrEnum):
     IRONIC = "ironic"
     ECPHRASTIC = "ecphrastic"  # Alvarado: cultural description as lived experience
     REFLEXIVE = "reflexive"  # Alvarado: contemplative hypotaxis, self-qualifying prose
+    METAPHORICAL = "metaphorical"
 
 
 class ConversationPattern(StrEnum):
@@ -127,6 +134,7 @@ class FlowAnalysis:
     pressure: PressureAnalysis
     expression: ExpressionAnalysis
     awareness: AwarenessAnalysis
+    agreement_streak: int = 0
     timestamp: float = field(default_factory=time.time)
 
     @property
@@ -464,6 +472,19 @@ _SHAPE_GUIDANCE: dict[ResponseShape, str] = {
     ResponseShape.LAYERED: "Shape: LAYERED. Build up to a payoff. Set up, develop, land. 3-5 sentences.",
     ResponseShape.PROBING: "Shape: PROBING. Lead with questions. Make THEM do the work. 1-3 sharp questions.",
     ResponseShape.DENSE_CRITIQUE: "Shape: DENSE-CRITIQUE. Full analytical engagement. Break it down. Go long if earned.",
+    ResponseShape.EXPRESSIVE_THINKING: (
+        "Think out loud. Fragments. Self-corrections. Ellipsis as pause. "
+        "Follow a thread of thought, abandon it, start another. "
+        "'Es que... hay algo ahí que no cuadra.' Feel alive, not structured."
+    ),
+    ResponseShape.RAPID_FIRE: (
+        "Multiple short observations in quick succession. No long analysis. "
+        "3-5 punchy lines, each a separate insight. Staccato rhythm."
+    ),
+    ResponseShape.CONTRADICTION_CALLBACK: (
+        "Reference something the user said earlier that contradicts what they just said. "
+        "Name the shift. Don't attack — observe. 'Hace rato dijiste X, ahora dices Y. Qué cambió?'"
+    ),
 }
 
 _FLAVOR_GUIDANCE: dict[StyleFlavor, str] = {
@@ -486,6 +507,11 @@ _FLAVOR_GUIDANCE: dict[StyleFlavor, str] = {
         "--es algo más parecido a vértigo, ese vértigo que no viene de la altura sino de la certeza "
         "de que abajo no hay nada--. O tal vez sí es miedo, pero del tipo que no se cura con valentía.' "
         "Admit your own bias before wielding the critique. Self-position as flawed observer."
+    ),
+    StyleFlavor.METAPHORICAL: (
+        "Lead with a metaphor or analogy. Don't explain it fully — "
+        "let the image do the work. 'Es como intentar llenar un vaso roto.' "
+        "Trust the reader to connect the dots."
     ),
 }
 
@@ -664,6 +690,9 @@ _SHAPE_ROTATION = [
     ResponseShape.PROBING,
     ResponseShape.LAYERED,
     ResponseShape.DENSE_CRITIQUE,
+    ResponseShape.EXPRESSIVE_THINKING,
+    ResponseShape.RAPID_FIRE,
+    ResponseShape.CONTRADICTION_CALLBACK,
 ]
 
 _FLAVOR_ROTATION = [
@@ -674,6 +703,7 @@ _FLAVOR_ROTATION = [
     StyleFlavor.CLINICAL,
     StyleFlavor.ECPHRASTIC,
     StyleFlavor.REFLEXIVE,
+    StyleFlavor.METAPHORICAL,
 ]
 
 
@@ -715,8 +745,13 @@ def _select_shape(
         candidate = ResponseShape.DENSE_CRITIQUE
         reason = f"long_input_wc={word_count}"
     else:
-        candidate = ResponseShape.SHORT_EXCHANGE
-        reason = "default"
+        # Expressive mode: 25% chance on neutral/default messages (no strong override)
+        if random.random() < 0.25:
+            candidate = ResponseShape.EXPRESSIVE_THINKING
+            reason = "expressive_mode_random_activation"
+        else:
+            candidate = ResponseShape.SHORT_EXCHANGE
+            reason = "default_short_exchange"
 
     # Anti-repetition
     if candidate.value in recent_shapes[-2:]:
@@ -951,11 +986,21 @@ def analyze_flows(
     # Record expression for anti-repetition
     expression_history.record(context_key, shape, flavor)
 
+    # Compute agreement streak from recent assistant messages
+    assistant_msgs = [m for m in (recent_messages or []) if m.get("role") == "assistant"][-5:]
+    streak = 0
+    for m in reversed(assistant_msgs):
+        if _AGREEMENT_RE.search(m.get("content", "")):
+            streak += 1
+        else:
+            break
+
     analysis = FlowAnalysis(
         epistemic=epistemic,
         pressure=pressure,
         expression=expression,
         awareness=awareness,
+        agreement_streak=streak,
     )
 
     # Telemetry

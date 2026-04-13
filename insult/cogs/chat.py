@@ -396,6 +396,12 @@ class ChatCog(commands.Cog):
         # Post-generation flow adherence validation (telemetry only)
         validate_flow_adherence(response, flow_analysis)
 
+        # Phase 2 (v3.1.0): Quality check (telemetry only — does not block)
+        from insult.core.quality import check_quality
+
+        recent_shapes = self._expression_history.recent_shapes(context_key, n=5)
+        check_quality(response, text, recent_shapes, agreement_streak=flow_analysis.agreement_streak)
+
         # Record message trace for dashboard
         from insult.core.metrics import record_message_trace
 
