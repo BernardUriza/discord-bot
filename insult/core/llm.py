@@ -134,14 +134,6 @@ class LLMClient:
                 log.error("llm_auth_error", error=str(e))
                 raise
 
-            except anthropic.OverloadedError as e:
-                last_error = e
-                wait = 2**attempt
-                log.warning("llm_overloaded", attempt=attempt, wait_seconds=wait, error=str(e))
-                if attempt == self.max_retries:
-                    break
-                await asyncio.sleep(wait)
-
             except (anthropic.APITimeoutError, anthropic.APIConnectionError) as e:
                 last_error = e
                 log.warning("llm_timeout", attempt=attempt, error=str(e))
@@ -149,10 +141,18 @@ class LLMClient:
                     break
                 await asyncio.sleep(1)
 
-            except anthropic.APIError as e:
+            except anthropic.APIStatusError as e:
                 last_error = e
-                log.error("llm_api_error", error=str(e))
-                break
+                # 529 Overloaded — transient, retry with backoff
+                if e.status_code == 529:
+                    wait = 2**attempt
+                    log.warning("llm_overloaded", attempt=attempt, wait_seconds=wait, status=529)
+                    if attempt == self.max_retries:
+                        break
+                    await asyncio.sleep(wait)
+                else:
+                    log.error("llm_api_error", status=e.status_code, error=str(e))
+                    break
 
         log.error("llm_failed", attempts=self.max_retries, last_error=str(last_error))
         raise last_error
