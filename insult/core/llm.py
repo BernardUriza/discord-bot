@@ -134,6 +134,14 @@ class LLMClient:
                 log.error("llm_auth_error", error=str(e))
                 raise
 
+            except anthropic.OverloadedError as e:
+                last_error = e
+                wait = 2**attempt
+                log.warning("llm_overloaded", attempt=attempt, wait_seconds=wait, error=str(e))
+                if attempt == self.max_retries:
+                    break
+                await asyncio.sleep(wait)
+
             except (anthropic.APITimeoutError, anthropic.APIConnectionError) as e:
                 last_error = e
                 log.warning("llm_timeout", attempt=attempt, error=str(e))
