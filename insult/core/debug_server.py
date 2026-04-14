@@ -125,6 +125,12 @@ async def _handle_reminders(request: web.Request) -> web.Response:
     return web.json_response({"count": len(reminders), "reminders": reminders})
 
 
+async def _handle_costs(_request: web.Request) -> web.Response:
+    from insult.core.llm import get_usage_report
+
+    return web.json_response(get_usage_report())
+
+
 def build_app(memory: MemoryStore, debug_token: str) -> web.Application:
     """Construct the aiohttp Application with routes and middleware."""
     app = web.Application(middlewares=[_auth_middleware])
@@ -135,6 +141,7 @@ def build_app(memory: MemoryStore, debug_token: str) -> web.Application:
     app.router.add_get("/debug/channels", _handle_channels)
     app.router.add_get("/debug/stats", _handle_stats)
     app.router.add_get("/debug/reminders", _handle_reminders)
+    app.router.add_get("/debug/costs", _handle_costs)
     return app
 
 

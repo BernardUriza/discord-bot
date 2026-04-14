@@ -20,6 +20,64 @@ from insult.core.character import (
 
 log = structlog.get_logger()
 
+# --- Token usage tracking (in-memory, resets on redeploy) ---
+# Pricing per million tokens (Sonnet 4, as of 2026)
+_PRICING = {
+    "input": 3.00,  # $/M input tokens
+    "output": 15.00,  # $/M output tokens
+    "cache_read": 0.30,  # $/M cache read tokens (90% discount)
+    "cache_create": 3.75,  # $/M cache creation tokens (25% premium)
+}
+
+_usage_totals = {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_read_tokens": 0,
+    "cache_create_tokens": 0,
+    "requests": 0,
+    "errors": 0,
+}
+
+
+def record_usage(input_tokens: int, output_tokens: int, cache_read: int = 0, cache_create: int = 0) -> None:
+    """Accumulate token usage for cost tracking."""
+    _usage_totals["input_tokens"] += input_tokens
+    _usage_totals["output_tokens"] += output_tokens
+    _usage_totals["cache_read_tokens"] += cache_read
+    _usage_totals["cache_create_tokens"] += cache_create
+    _usage_totals["requests"] += 1
+
+
+def get_usage_report() -> dict:
+    """Return accumulated usage with estimated cost in USD."""
+    t = _usage_totals
+    cost_input = (t["input_tokens"] / 1_000_000) * _PRICING["input"]
+    cost_output = (t["output_tokens"] / 1_000_000) * _PRICING["output"]
+    cost_cache_read = (t["cache_read_tokens"] / 1_000_000) * _PRICING["cache_read"]
+    cost_cache_create = (t["cache_create_tokens"] / 1_000_000) * _PRICING["cache_create"]
+    total_cost = cost_input + cost_output + cost_cache_read + cost_cache_create
+
+    return {
+        "tokens": {
+            "input": t["input_tokens"],
+            "output": t["output_tokens"],
+            "cache_read": t["cache_read_tokens"],
+            "cache_create": t["cache_create_tokens"],
+            "total": t["input_tokens"] + t["output_tokens"],
+        },
+        "requests": t["requests"],
+        "errors": t["errors"],
+        "cost_usd": {
+            "input": round(cost_input, 4),
+            "output": round(cost_output, 4),
+            "cache_read": round(cost_cache_read, 4),
+            "cache_create": round(cost_cache_create, 4),
+            "total": round(total_cost, 4),
+        },
+        "avg_tokens_per_request": round((t["input_tokens"] + t["output_tokens"]) / max(t["requests"], 1)),
+        "note": "Resets on redeploy. Pricing based on Sonnet 4 rates.",
+    }
+
 
 @dataclass
 class LLMResponse:
@@ -112,6 +170,7 @@ class LLMClient:
                     cache_create=cache_create,
                     stop_reason=response.stop_reason,
                 )
+                record_usage(response.usage.input_tokens, response.usage.output_tokens, cache_read, cache_create)
                 return _parse_response_content(response.content)
 
             except anthropic.RateLimitError as e:
@@ -155,6 +214,7 @@ class LLMClient:
                     log.error("llm_api_error", status=e.status_code, error=str(e))
                     break
 
+        _usage_totals["errors"] += 1
         log.error("llm_failed", attempts=self.max_retries, last_error=str(last_error))
         raise last_error
 
