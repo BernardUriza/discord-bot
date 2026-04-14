@@ -550,6 +550,18 @@ class MemoryStore:
 
     # --- Channel Summaries (cross-channel awareness) ---
 
+    async def get_channel_participants(self, channel_id: str, limit: int = 10) -> list[dict]:
+        """Get distinct users who posted in a channel, most recent first."""
+        await self._ensure_connection()
+        cursor = await self._db.execute(
+            "SELECT user_id, user_name, MAX(timestamp) as last_ts FROM messages "
+            "WHERE channel_id = ? AND role = 'user' "
+            "GROUP BY user_id ORDER BY last_ts DESC LIMIT ?",
+            (channel_id, limit),
+        )
+        rows = await cursor.fetchall()
+        return [{"user_id": r[0], "user_name": r[1], "last_ts": r[2]} for r in rows]
+
     async def get_channel_activity_since(self, guild_id: str, since_ts: float) -> list[dict]:
         """Returns (channel_id, count) pairs for channels with activity since given timestamp."""
         await self._ensure_connection()

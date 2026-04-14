@@ -220,6 +220,18 @@ class ChatCog(commands.Cog):
         # Load user facts — use semantic search for relevance when many facts exist
         user_facts = await self._load_facts_smart(user_id, text)
 
+        # Load facts for ALL other participants in channel (group chat awareness)
+        other_participants_facts: dict[str, list[dict]] = {}
+        try:
+            participants = await self.memory.get_channel_participants(channel_id, limit=10)
+            for p in participants:
+                if p["user_id"] != user_id:  # skip current speaker
+                    facts = await self.memory.get_facts(p["user_id"])
+                    if facts:
+                        other_participants_facts[p["user_name"]] = facts[:5]
+        except Exception:
+            log.exception("chat_participants_facts_failed")
+
         # Build server pulse (cross-channel awareness)
         server_pulse = ""
         if message.guild:
@@ -292,6 +304,14 @@ class ChatCog(commands.Cog):
                 system_prompt += f"\n\n{stance_prompt}"
 
         system_prompt += build_facts_prompt(user_name, user_facts)
+
+        # Inject other participants' facts (group chat awareness)
+        if other_participants_facts:
+            parts = ["## Other People in This Channel (they are REAL — never say they don't exist)"]
+            for name, facts in other_participants_facts.items():
+                fact_lines = ", ".join(f["fact"] for f in facts[:3])
+                parts.append(f"- {name}: {fact_lines}")
+            system_prompt += "\n\n" + "\n".join(parts)
 
         if profile and profile.is_confident:
             log.info(
