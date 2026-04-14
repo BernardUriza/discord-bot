@@ -227,6 +227,95 @@ def normalize_formatting(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Anti-parrot — strip verbatim quotes of user message from response
+# ---------------------------------------------------------------------------
+
+_QUOTE_STOPWORDS = {
+    "de",
+    "la",
+    "el",
+    "en",
+    "que",
+    "es",
+    "un",
+    "una",
+    "y",
+    "a",
+    "los",
+    "las",
+    "no",
+    "se",
+    "lo",
+    "por",
+    "con",
+    "para",
+    "del",
+    "al",
+    "me",
+    "te",
+    "mi",
+    "tu",
+    "su",
+    "ya",
+    "si",
+    "mas",
+    "pero",
+    "como",
+    "the",
+    "is",
+    "and",
+    "but",
+}
+
+
+def strip_echoed_quotes(response: str, user_message: str) -> str:
+    """Remove verbatim quotes of the user's message from the bot's response.
+
+    Detects when the bot quoted the user's exact words (5+ word sequences)
+    and strips them. Humans don't repeat each other's full phrases in chat.
+    """
+    if not response or not user_message:
+        return response
+
+    user_words = user_message.lower().split()
+    if len(user_words) < 5:
+        return response  # too short to have meaningful quotes
+
+    # Build all 5-word n-grams from user message
+    user_ngrams: set[str] = set()
+    for i in range(len(user_words) - 4):
+        ngram = " ".join(user_words[i : i + 5])
+        # Skip if mostly stopwords
+        content_words = [w for w in user_words[i : i + 5] if w not in _QUOTE_STOPWORDS]
+        if len(content_words) >= 2:
+            user_ngrams.add(ngram)
+
+    if not user_ngrams:
+        return response
+
+    # Find and remove echoed segments — only the n-gram itself + surrounding quotes
+    modified = response
+    for ngram in sorted(user_ngrams, key=len, reverse=True):
+        pattern = re.compile(re.escape(ngram), re.IGNORECASE)
+        if pattern.search(modified):
+            # Strip the n-gram and any immediately surrounding quote marks
+            modified = re.sub(
+                r'["\u201c\u201d]*' + re.escape(ngram) + r'["\u201c\u201d]*',
+                "",
+                modified,
+                flags=re.IGNORECASE,
+                count=1,
+            )
+            log.info("echo_stripped", ngram=ngram[:50])
+
+    # Clean up artifacts: double spaces, orphaned dashes, empty bold
+    modified = re.sub(r"\*\*\s*\*\*", "", modified)  # empty bold
+    modified = re.sub(r"  +", " ", modified)  # double spaces
+    modified = re.sub(r"\n\s*\n\s*\n", "\n\n", modified)  # triple newlines
+    return modified.strip() if modified.strip() else response  # never return empty
+
+
+# ---------------------------------------------------------------------------
 # Bullet/list stripper — convert AI-formatted lists to prose
 # ---------------------------------------------------------------------------
 

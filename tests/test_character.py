@@ -10,6 +10,7 @@ from insult.core.character import (
     get_length_hint,
     normalize_formatting,
     sanitize,
+    strip_echoed_quotes,
     strip_lists,
 )
 from insult.core.presets import PresetMode
@@ -430,3 +431,53 @@ class TestEnforceLengthVariation:
         text = "A. B. C. D. E."
         assert enforce_length_variation(text, [80, 150, 130]) == text  # 80 is not > 80
         assert enforce_length_variation(text, [200, 150, 130]) == text  # 200 is not < 200
+
+
+# --- Anti-Parrot (strip echoed quotes) ---
+
+
+class TestStripEchoedQuotes:
+    def test_empty_inputs(self):
+        assert strip_echoed_quotes("", "hola") == ""
+        assert strip_echoed_quotes("response", "") == "response"
+
+    def test_short_user_message_ignored(self):
+        """User messages under 5 words should not trigger stripping."""
+        assert strip_echoed_quotes("Exacto, hola mundo wey", "hola mundo") == "Exacto, hola mundo wey"
+
+    def test_strips_verbatim_quote(self):
+        user = "No he fotografiado ningún homeless porque los respeto mucho"
+        response = 'Eso de "No he fotografiado ningún homeless porque los respeto mucho" está cabrón.'
+        result = strip_echoed_quotes(response, user)
+        assert "No he fotografiado" not in result
+        assert "cabrón" in result  # the bot's own words survive
+
+    def test_strips_unquoted_echo(self):
+        user = "me quiero ir a caminar por toda la ciudad mañana temprano"
+        response = "Te quiero ir a caminar por toda la ciudad mañana temprano es pura energía nómada."
+        result = strip_echoed_quotes(response, user)
+        assert "caminar por toda la ciudad" not in result
+
+    def test_preserves_short_overlaps(self):
+        """4-word overlaps should NOT be stripped (only 5+)."""
+        user = "el clima está bonito hoy en la ciudad"
+        response = "Sí, el clima está bonito."
+        assert strip_echoed_quotes(response, user) == response
+
+    def test_never_returns_empty(self):
+        """Even if everything is stripped, return original."""
+        user = "esto es exactamente lo que dije antes sobre el tema"
+        response = "esto es exactamente lo que dije antes sobre el tema"
+        result = strip_echoed_quotes(response, user)
+        assert len(result) > 0
+
+    def test_real_production_example(self):
+        """Regression test from actual production messages."""
+        user = "No he fotografiado ningún homeless porque los respeto mucho"
+        response = (
+            '**"No he fotografiado ningún homeless porque los respeto mucho."**\n\n'
+            "Esa línea define todo tu tour, Bernard."
+        )
+        result = strip_echoed_quotes(response, user)
+        assert "define todo tu tour" in result
+        assert "No he fotografiado" not in result
