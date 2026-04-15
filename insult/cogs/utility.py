@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import discord
 import structlog
 from discord.ext import commands
 
@@ -226,7 +227,7 @@ class UtilityCog(commands.Cog):
                 "```\n"
                 "Listo. Los canales son read-only — solo yo escribo ahi."
             )
-        except PermissionError:
+        except (PermissionError, discord.Forbidden):
             await ctx.send("No tengo permiso de **Manage Channels**. Daselo al bot y vuelve a intentar.")
         except Exception:
             log.exception("setup_failed", guild_id=str(ctx.guild.id))
