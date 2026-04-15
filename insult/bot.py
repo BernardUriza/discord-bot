@@ -15,6 +15,7 @@ from insult.core.character import _get_current_time_context, strip_metadata
 from insult.core.debug_server import start_debug_server, stop_debug_server
 from insult.core.delivery import MESSAGE_DELIMITER, split_response
 from insult.core.errors import get_error_response
+from insult.core.guild_setup import post_reminder_delivered
 from insult.core.metrics import upload_dashboard_data
 from insult.core.proactive import (
     generate_proactive_message,
@@ -323,6 +324,16 @@ def _build(container: Container):
                     await memory.mark_reminder_delivered(reminder["id"])
 
                 log.info("reminder_delivered", reminder_id=reminder["id"], channel_id=reminder["channel_id"])
+
+                # Post delivery log to system reminders channel
+                await post_reminder_delivered(
+                    bot,
+                    memory,
+                    reminder.get("guild_id"),
+                    reminder["description"],
+                    mentions,
+                    reminder["id"],
+                )
         except Exception:
             log.exception("reminder_check_failed")
 

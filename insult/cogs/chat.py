@@ -30,6 +30,7 @@ from insult.core.disclosure import scan_disclosure
 from insult.core.errors import classify_error, get_error_response
 from insult.core.facts import build_facts_prompt, extract_facts
 from insult.core.flows import ExpressionHistory, analyze_flows, build_flow_prompt, validate_flow_adherence
+from insult.core.guild_setup import post_facts_to_channel, post_reminder_set
 from insult.core.llm import WEB_SEARCH_TOOL
 from insult.core.presets import PresetMode, PresetModifier
 from insult.core.reactions import add_reactions, parse_reactions, strip_reactions
@@ -455,8 +456,10 @@ class ChatCog(commands.Cog):
             }
         )
 
-        # Background fact extraction
-        self._spawn_task(self._extract_user_facts(user_id, user_name, user_facts, recent))
+        # Background fact extraction (with channel posting)
+        guild_id = str(message.guild.id) if message.guild else None
+        ch_name = getattr(message.channel, "name", "")
+        self._spawn_task(self._extract_user_facts(user_id, user_name, user_facts, recent, guild_id, ch_name))
 
     # --- Private helpers ---
 
@@ -566,6 +569,19 @@ class ChatCog(commands.Cog):
                     remind_at=remind_at_str,
                     recurring=recurring,
                 )
+                # Post to system reminders channel
+                if guild_id:
+                    mention_display = " ".join(f"<@{uid.strip()}>" for uid in mention_ids if uid) if mention_ids else ""
+                    await post_reminder_set(
+                        self.bot,
+                        self.memory,
+                        guild_id,
+                        description,
+                        remind_at_str,
+                        mention_display,
+                        recurring,
+                        reminder_id,
+                    )
 
             elif tool_call.name == "list_reminders":
                 channel_id = tool_call.input.get("channel_id", str(message.channel.id))
@@ -653,11 +669,30 @@ class ChatCog(commands.Cog):
         except Exception:
             log.exception("channel_inauguration_failed", channel=channel_name)
 
-    async def _extract_user_facts(self, user_id: str, user_name: str, existing_facts: list[dict], recent: list[dict]):
+    async def _extract_user_facts(
+        self,
+        user_id: str,
+        user_name: str,
+        existing_facts: list[dict],
+        recent: list[dict],
+        guild_id: str | None = None,
+        channel_name: str = "",
+    ):
         """Background task: extract user facts from recent conversation."""
         try:
             new_facts = await extract_facts(self.llm.client, self.settings.llm_model, user_name, existing_facts, recent)
             if new_facts != existing_facts:
                 await self.memory.save_facts(user_id, new_facts)
+                # Post new safe facts to system channel
+                if guild_id:
+                    await post_facts_to_channel(
+                        self.bot,
+                        self.memory,
+                        guild_id,
+                        user_name,
+                        new_facts,
+                        existing_facts,
+                        channel_name,
+                    )
         except Exception:
             log.exception("facts_extraction_background_failed", user_id=user_id)

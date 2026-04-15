@@ -194,6 +194,17 @@ class MemoryStore:
             CREATE INDEX IF NOT EXISTS idx_contradiction_user
             ON contradiction_log(user_id, timestamp DESC)
         """)
+
+        # --- Guild config (v3.3.0): system channels for facts/reminders ---
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS guild_config (
+                guild_id TEXT PRIMARY KEY,
+                category_id TEXT,
+                facts_channel_id TEXT,
+                reminders_channel_id TEXT,
+                setup_complete INTEGER NOT NULL DEFAULT 0
+            )
+        """)
         await self._db.commit()
 
         # Initialize vector search (sqlite-vec + FTS5)
@@ -898,3 +909,47 @@ class MemoryStore:
             await self._db.commit()
         except aiosqlite.Error as e:
             log.error("contradiction_store_failed", error=str(e))
+
+    # --- Guild Config (v3.3.0) ---
+
+    async def get_guild_config(self, guild_id: str) -> dict | None:
+        """Get guild config (system channel IDs). Returns None if not set up."""
+        await self._ensure_connection()
+        cursor = await self._db.execute(
+            "SELECT guild_id, category_id, facts_channel_id, reminders_channel_id, setup_complete "
+            "FROM guild_config WHERE guild_id = ?",
+            (guild_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "guild_id": row[0],
+            "category_id": row[1],
+            "facts_channel_id": row[2],
+            "reminders_channel_id": row[3],
+            "setup_complete": bool(row[4]),
+        }
+
+    async def save_guild_config(
+        self,
+        guild_id: str,
+        category_id: str,
+        facts_channel_id: str,
+        reminders_channel_id: str,
+    ) -> None:
+        """Save or update guild config with system channel IDs."""
+        await self._ensure_connection()
+        try:
+            await self._db.execute(
+                "INSERT INTO guild_config (guild_id, category_id, facts_channel_id, "
+                "reminders_channel_id, setup_complete) VALUES (?, ?, ?, ?, 1) "
+                "ON CONFLICT(guild_id) DO UPDATE SET category_id=excluded.category_id, "
+                "facts_channel_id=excluded.facts_channel_id, "
+                "reminders_channel_id=excluded.reminders_channel_id, setup_complete=1",
+                (guild_id, category_id, facts_channel_id, reminders_channel_id),
+            )
+            await self._db.commit()
+            log.info("guild_config_saved", guild_id=guild_id)
+        except aiosqlite.Error as e:
+            log.error("guild_config_save_failed", guild_id=guild_id, error=str(e))

@@ -44,6 +44,9 @@ def mock_memory():
     mem.store_stance = AsyncMock()
     mem.get_stances = AsyncMock(return_value=[])
     mem.store_contradiction = AsyncMock()
+    # Guild config (v3.3.0)
+    mem.get_guild_config = AsyncMock(return_value=None)
+    mem.save_guild_config = AsyncMock()
     return mem
 
 

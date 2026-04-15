@@ -9,6 +9,7 @@ from discord.ext import commands
 
 from insult.core.errors import get_error_response
 from insult.core.facts import extract_facts
+from insult.core.guild_setup import setup_guild
 
 if TYPE_CHECKING:
     from insult.app import Container
@@ -197,3 +198,36 @@ class UtilityCog(commands.Cog):
         if errors:
             summary += f", **{errors}** errores"
         await ctx.send(summary)
+
+    @commands.command(name="setup")
+    @commands.has_permissions(manage_channels=True)
+    @commands.cooldown(1, 60, commands.BucketType.guild)
+    async def setup(self, ctx: commands.Context):
+        """Crea canales de sistema (facts + reminders) con formato cyberpunk."""
+        if not ctx.guild:
+            await ctx.send(get_error_response("generic"))
+            return
+
+        # Check if already set up
+        config = await self.memory.get_guild_config(str(ctx.guild.id))
+        if config and config["setup_complete"]:
+            await ctx.send("Ya tengo mis canales montados, no seas redundante. Revisa la categoria **INSULT SYSTEMS**.")
+            return
+
+        try:
+            await setup_guild(ctx.guild, self.memory)
+            await ctx.send(
+                "```\n"
+                "░▒▓ SETUP COMPLETE ▓▒░\n"
+                "║ category: INSULT SYSTEMS\n"
+                "║ #insult-facts: online\n"
+                "║ #insult-reminders: online\n"
+                "╚════════════════════════════╝\n"
+                "```\n"
+                "Listo. Los canales son read-only — solo yo escribo ahi."
+            )
+        except PermissionError:
+            await ctx.send("No tengo permiso de **Manage Channels**. Daselo al bot y vuelve a intentar.")
+        except Exception:
+            log.exception("setup_failed", guild_id=str(ctx.guild.id))
+            await ctx.send(get_error_response("generic"))
