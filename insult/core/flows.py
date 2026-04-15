@@ -467,10 +467,21 @@ _PRESSURE_GUIDANCE: dict[int, str] = {
 }
 
 _SHAPE_GUIDANCE: dict[ResponseShape, str] = {
-    ResponseShape.ONE_HIT: "Shape: ONE-HIT. Single devastating line. Maximum density. Land it and stop.",
-    ResponseShape.SHORT_EXCHANGE: "Shape: SHORT-EXCHANGE. 2-3 punchy sentences. Quick, direct, done.",
+    ResponseShape.ONE_HIT: (
+        "Shape: ONE-HIT. HARD LIMIT: 1 sentence, max 20 words. "
+        "One devastating line — land it and STOP. No elaboration, no follow-up, no context-setting. "
+        "If you write more than one sentence you have failed this instruction."
+    ),
+    ResponseShape.SHORT_EXCHANGE: (
+        "Shape: SHORT-EXCHANGE. LIMIT: 2-3 sentences, max 50 words total. "
+        "Quick, direct, done. No preamble, no wind-down."
+    ),
     ResponseShape.LAYERED: "Shape: LAYERED. Build up to a payoff. Set up, develop, land. 3-5 sentences.",
-    ResponseShape.PROBING: "Shape: PROBING. Lead with questions. Make THEM do the work. 1-3 sharp questions.",
+    ResponseShape.PROBING: (
+        "Shape: PROBING. Your response MUST contain at least 1 question mark. "
+        "Lead with sharp questions that make THEM do the work. 1-3 questions. "
+        "Do NOT just comment or describe — ASK something pointed."
+    ),
     ResponseShape.DENSE_CRITIQUE: "Shape: DENSE-CRITIQUE. Full analytical engagement. Break it down. Go long if earned.",
     ResponseShape.EXPRESSIVE_THINKING: (
         "Think out loud. Fragments. Self-corrections. Ellipsis as pause. "
@@ -1061,8 +1072,12 @@ def build_flow_prompt(analysis: FlowAnalysis) -> str:
     if pressure_text:
         parts.append(pressure_text)
 
-    # Expression (always inject)
-    parts.append("## Response Expression")
+    # Expression (always inject — with enforcement framing)
+    parts.append(
+        "## Response Expression (MANDATORY — override verbosity impulse)\n"
+        "The shape below is a HARD CONSTRAINT on your response structure. "
+        "Follow it even if the input tempts you to say more."
+    )
     parts.append(_SHAPE_GUIDANCE[analysis.expression.selected_shape])
     parts.append(_FLAVOR_GUIDANCE[analysis.expression.selected_flavor])
 
