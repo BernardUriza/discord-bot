@@ -183,7 +183,6 @@ def _readonly_overwrites(guild: discord.Guild) -> dict:
         guild.me: discord.PermissionOverwrite(
             view_channel=True,
             send_messages=True,
-            manage_messages=True,
             embed_links=True,
         ),
     }
