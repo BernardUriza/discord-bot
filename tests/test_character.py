@@ -238,6 +238,33 @@ class TestBuildAdaptivePrompt:
         prompt, _ = build_adaptive_prompt(self.BASE_PROMPT, None, 5, current_message="you're wrong, the route is fine")
         assert "Correction Protocol" in prompt
 
+    def test_cache_boundary_stripped_from_responses(self):
+        # Regression: CACHE_BOUNDARY marker must not leak to users if the LLM
+        # ever echoes the prompt structure back (defense in depth).
+        from insult.core.character import CACHE_BOUNDARY, strip_metadata
+
+        text = f"Respuesta normal.{CACHE_BOUNDARY}Más texto después."
+        cleaned = strip_metadata(text)
+        assert "CACHE_BOUNDARY" not in cleaned
+        assert "<<<" not in cleaned
+        assert "Respuesta normal." in cleaned
+        assert "Más texto" in cleaned
+
+    def test_length_hint_suppressed_when_correction_fires(self):
+        # v3.4.3: stacking length_hint on top of Correction Protocol over-compressed.
+        from insult.core.character import build_adaptive_prompt as bap
+
+        prompt, _ = bap(
+            self.BASE_PROMPT,
+            None,
+            5,
+            current_message="estas mal tu",
+            recent_response_lengths=[50, 50, 50, 50, 50],  # would normally trigger short hint
+        )
+        assert "Correction Protocol" in prompt
+        # The length hint section header should NOT appear alongside the protocol
+        assert "Length Variation" not in prompt
+
     def test_correction_protocol_no_false_positive_on_benign_phrases(self):
         # Regression v3.4.2: v3.4.1 regex matched on "nel", "wrong", "no creo" etc
         # which showed up in non-correction contexts and shrank responses bot-wide.

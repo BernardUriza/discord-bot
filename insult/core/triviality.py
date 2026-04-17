@@ -11,6 +11,27 @@ import re
 # Messages <= this many visible chars (after stripping) are candidates for triviality.
 _MIN_SUBSTANTIVE_LEN = 4
 
+# Short words that LOOK trivial but aren't — attention-callers, greetings, or
+# pronouns that demand a response. Checked before the length-based fallback.
+_SHORT_NON_TRIVIAL = frozenset(
+    {
+        "oye",
+        "ey",
+        "eh",
+        "hey",
+        "che",
+        "wey",
+        "vato",
+        "yo",
+        "mira",
+        "pues",
+        "sale",
+        "dime",
+        "vale",
+        "bien",  # "bien" alone — could be "bien?" meaning "you ok?"
+    }
+)
+
 # Case-insensitive exact-match tokens that convey no new information.
 _TRIVIAL_TOKENS = frozenset(
     {
@@ -111,6 +132,12 @@ def is_trivial(text: str) -> bool:
     parts = norm.split(" ")
     if len(parts) <= 3 and all(p in _TRIVIAL_TOKENS for p in parts):
         return True
+
+    # Short-word allowlist overrides the length-fallback below — attention-callers
+    # like "oye", "che", "hey" etc. must always get a response, even though they
+    # are <4 chars and without digits.
+    if len(parts) == 1 and norm in _SHORT_NON_TRIVIAL:
+        return False
 
     # Single "word" too short to contain intent, no digits (questions like "2+2?" survive)
     return len(parts) == 1 and len(norm) < _MIN_SUBSTANTIVE_LEN and not any(c.isdigit() for c in norm)

@@ -83,3 +83,12 @@ class TestIsTrivialFalse:
     def test_single_substantive_word(self):
         assert not is_trivial("insultame")
         assert not is_trivial("explica")
+
+    def test_attention_caller_short_words_are_not_trivial(self):
+        # Regression v3.4.3: "oye", "che", "hey" etc. are <4 chars and no digits,
+        # so the length-fallback used to flag them as trivial — but they are
+        # legitimate attention-callers that demand a response.
+        for word in ["oye", "ey", "eh", "hey", "che", "wey", "mira", "dime", "pues"]:
+            assert not is_trivial(word), f"attention-caller {word!r} should not be trivial"
+            assert not is_trivial(word.upper()), f"uppercase {word.upper()!r} should not be trivial"
+            assert not is_trivial(f"{word}?"), f"{word!r} with ? should not be trivial"

@@ -477,6 +477,9 @@ _METADATA_PATTERNS = [
     re.compile(r"^(?:Insult|insult)\s*:\s*", re.MULTILINE),
     # [SEND] that leaked into visible text
     re.compile(r"\[SEND\]", re.IGNORECASE),
+    # CACHE_BOUNDARY marker — if the model ever echoes the prompt-cache delimiter,
+    # strip it so users never see the internal structure leaking.
+    re.compile(r"<<<CACHE_BOUNDARY>>>\n?"),
     # NOTE: [REACT:] is NOT stripped here — chat.py parses it first.
 ]
 
@@ -674,7 +677,8 @@ def build_adaptive_prompt(
         r"\bthat'?s\s+(not\s+true|wrong|incorrect)\b"
         r")"
     )
-    if current_message and correction_signal.search(current_message):
+    correction_fired = bool(current_message and correction_signal.search(current_message))
+    if correction_fired:
         prompt += (
             "\n\n## Correction Protocol (user is pushing back)\n"
             "The user is contradicting you. Your response MUST do ONE of:\n"
@@ -687,7 +691,10 @@ def build_adaptive_prompt(
         )
 
     # --- Fix #3: Length variation hint ---
-    if recent_response_lengths:
+    # Suppressed when Correction Protocol is active — the protocol already
+    # dictates response shape (defend / redirect / concede-one-line) and
+    # stacking a separate length hint on top produced over-compression.
+    if recent_response_lengths and not correction_fired:
         hint = get_length_hint(recent_response_lengths)
         if hint:
             prompt += f"\n\n{hint}"

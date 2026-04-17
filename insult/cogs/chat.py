@@ -208,17 +208,21 @@ class ChatCog(commands.Cog):
         except Exception:
             log.exception("chat_store_user_failed", channel_id=channel_id)
 
-        # Cost guard: skip LLM call for trivial messages (ok, gracias, lone emojis, etc.)
-        # Message is already stored above, so context is preserved for the next real turn.
-        if not message.attachments and is_trivial(text):
-            log.info("skipped_trivial_message", channel_id=channel_id, user_id=user_id, text=text[:40])
-            return
-
+        # Update style profile BEFORE the trivial gate so short-message users
+        # still accumulate signal for language/formality/emoji detection —
+        # otherwise profiles of users who mostly send "ok/gracias/jaja"
+        # stay under the is_confident threshold forever.
         try:
             profile = await self.memory.update_profile(user_id, text)
         except Exception:
             log.exception("chat_profile_update_failed", user_id=user_id)
             profile = None
+
+        # Cost guard: skip LLM call for trivial messages (ok, gracias, lone emojis, etc.)
+        # Message is already stored + profile already updated above.
+        if not message.attachments and is_trivial(text):
+            log.info("skipped_trivial_message", channel_id=channel_id, user_id=user_id, text=text[:40])
+            return
 
         context, recent = await self._build_context(channel_id, text, attachment_blocks)
         if context is None:
