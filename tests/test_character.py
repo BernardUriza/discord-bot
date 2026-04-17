@@ -238,6 +238,23 @@ class TestBuildAdaptivePrompt:
         prompt, _ = build_adaptive_prompt(self.BASE_PROMPT, None, 5, current_message="you're wrong, the route is fine")
         assert "Correction Protocol" in prompt
 
+    def test_correction_protocol_no_false_positive_on_benign_phrases(self):
+        # Regression v3.4.2: v3.4.1 regex matched on "nel", "wrong", "no creo" etc
+        # which showed up in non-correction contexts and shrank responses bot-wide.
+        benign = [
+            "me llevo mi mac? tiene pila",
+            "es la 1:15",
+            "como 10 min, le falta 10%",
+            "si a esa hora me salgo",
+            "no creo que venga hoy",
+            "nel",
+            "vi el wrong answer tag en yelp",
+            "eso no es lo que pedi",
+        ]
+        for msg in benign:
+            prompt, _ = build_adaptive_prompt(self.BASE_PROMPT, None, 5, current_message=msg)
+            assert "Correction Protocol" not in prompt, f"false positive on: {msg!r}"
+
     def test_arc_on_system_critique(self):
         prompt, preset = build_adaptive_prompt(
             self.BASE_PROMPT, None, 5, current_message="el capitalismo es explotacion pura"

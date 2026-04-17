@@ -653,13 +653,26 @@ def build_adaptive_prompt(
             )
 
     # --- Preventive correction protocol (runs BEFORE the LLM, not after) ---
-    # The reactive guard above only fires AFTER two capitulations have already
-    # shipped. This one inspects the current user message for correction
-    # signals and pre-emptively tells the model how to handle it.
+    # Reactive guard above only fires AFTER two capitulations. This one looks
+    # at the current user message for pushback aimed *at the bot* and injects
+    # a how-to-handle-it block. Patterns MUST be narrow — a false positive
+    # forces "concede in one line" and shrinks unrelated responses.
     correction_signal = re.compile(
-        r"(?i)\b(est[aá]s? mal|te equivocaste|te pasaste|te confundes|te falla|"
-        r"no es cierto|eso no es|no (es )?(as[ií]|verdad)|you'?re wrong|you got it wrong|"
-        r"no (te )?(creo|conf[ií]o)|por eso no conf[ií]o|nel|incorrecto|wrong)\b"
+        r"(?i)("
+        # Spanish: pronoun-targeted ("estás mal TU", "TU no sabes", "TE equivocaste")
+        r"\best[aá]s?\s+mal\b|"
+        r"\bte\s+equivocaste\b|"
+        r"\bte\s+(pasaste|confundes|falla)\b|"
+        r"\bno\s+te\s+(creo|conf[ií]o)\b|"
+        r"\bpor\s+eso\s+no\s+conf[ií]o\b|"
+        # Spanish: explicit falsehood claims about the bot's statement
+        r"\beso\s+(que\s+dices\s+)?no\s+es\s+(cierto|verdad|as[ií])\b|"
+        r"\bestas\s+equivocad[oa]\b|"
+        # English: explicit wrong/disagree aimed at bot
+        r"\byou'?re\s+wrong\b|"
+        r"\byou\s+got\s+it\s+wrong\b|"
+        r"\bthat'?s\s+(not\s+true|wrong|incorrect)\b"
+        r")"
     )
     if current_message and correction_signal.search(current_message):
         prompt += (

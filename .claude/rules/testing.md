@@ -62,6 +62,33 @@ curl -s "http://localhost:8787/debug/channels?guild_id=99999&since_hours=24" \
 - Uses `hmac.compare_digest` for timing-safe token comparison
 - For local testing, bot must be running (`python -m insult run`)
 
+### MANDATORY: Query debug endpoint BEFORE diagnosing bot behavior
+
+Any time the user reports that the bot is misbehaving (wrong responses, too
+short, too long, hallucinating, stuck in a preset, capitulating, etc.), the
+FIRST step is to pull the actual user↔bot exchange from
+`/debug/messages?channel_id=...&limit=30`. DO NOT guess from Azure Log
+Analytics alone — Log Analytics filters and structures events but does NOT
+include the raw inbound user messages, which are the single most important
+diagnostic signal. Going straight to log-based theorizing without reading
+the real dialogue is going in blind and it burns the user's trust.
+
+Workflow:
+1. Get the channel_id where the bad behavior happened (ask if unclear).
+2. `curl /debug/messages?channel_id=<id>&limit=30` to see the actual
+   conversation (user messages + bot replies in order).
+3. Only then correlate with Azure `preset_classified` / `llm_response` /
+   `Correction Protocol` events to form a hypothesis.
+4. Reproduce the classifier / prompt-build locally against the real message
+   text before proposing a fix.
+
+This rule exists because on 2026-04-17 a servile-capitulation fix
+(`Correction Protocol`) caused the bot to respond in one-line grudges to
+almost every message. The root cause (overbroad regex matching "nel",
+"wrong", "no creo", "eso no es") could have been confirmed in 30 seconds
+by reading the debug endpoint, but was diagnosed from Azure logs alone —
+slower, noisier, and wrong-until-proven-right.
+
 ## E2E Testing with Discord MCP
 When you need to verify that the bot actually works end-to-end (not just unit tests), use the Discord MCP server to interact with a real Discord server. This Mac is the server.
 
