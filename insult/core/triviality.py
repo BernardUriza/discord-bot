@@ -70,9 +70,7 @@ _TRIVIAL_TOKENS = frozenset(
 
 _WHITESPACE = re.compile(r"\s+")
 _PUNCTUATION = re.compile(r"[^\w\s]", re.UNICODE)
-_EMOJI_RANGE = re.compile(
-    r"[\U0001F000-\U0001FFFF\u2600-\u27BF\u2300-\u23FF\u2B00-\u2BFF]"
-)
+_EMOJI_RANGE = re.compile(r"[\U0001F000-\U0001FFFF\u2600-\u27BF\u2300-\u23FF\u2B00-\u2BFF]")
 
 
 def _normalize(text: str) -> str:
