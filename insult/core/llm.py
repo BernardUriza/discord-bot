@@ -9,6 +9,7 @@ from anthropic.types import MessageParam
 
 from insult.core.actions import ToolCall
 from insult.core.character import (
+    CACHE_BOUNDARY,
     CHARACTER_REINFORCEMENT,
     detect_anti_patterns,
     detect_break,
@@ -95,6 +96,33 @@ WEB_SEARCH_TOOL = {
 }
 
 
+def _build_system_blocks(system_prompt: str) -> list[dict] | str:
+    """Build Anthropic system blocks with prompt caching on the stable prefix.
+
+    If `system_prompt` contains the CACHE_BOUNDARY marker, split it into a
+    cacheable stable block (everything before the marker, with
+    cache_control=ephemeral) and a dynamic block (everything after, no cache).
+    If the marker is absent, return the raw string (backwards compatible with
+    callers that don't mark a boundary — e.g., simple utility calls).
+    """
+    if CACHE_BOUNDARY not in system_prompt:
+        return system_prompt
+
+    stable, dynamic = system_prompt.split(CACHE_BOUNDARY, 1)
+    stable = stable.rstrip()
+    dynamic = dynamic.lstrip()
+
+    if not stable:
+        return dynamic or system_prompt
+
+    blocks: list[dict] = [
+        {"type": "text", "text": stable, "cache_control": {"type": "ephemeral"}},
+    ]
+    if dynamic:
+        blocks.append({"type": "text", "text": dynamic})
+    return blocks
+
+
 def _parse_response_content(content: list) -> LLMResponse:
     """Extract text and tool_use blocks from Claude API response content.
 
@@ -141,7 +169,8 @@ class LLMClient:
         tool_choice: dict | None = None,
     ) -> LLMResponse:
         """Raw API call with retry logic for transient errors."""
-        last_error = None
+        last_error: Exception | None = None
+        attempt = 0
 
         for attempt in range(1, self.max_retries + 1):
             try:
@@ -149,9 +178,8 @@ class LLMClient:
                 kwargs = {
                     "model": self.model,
                     "max_tokens": self.max_tokens,
-                    "system": system_prompt,
+                    "system": _build_system_blocks(system_prompt),
                     "messages": messages,
-                    "cache_control": {"type": "ephemeral"},
                 }
                 if tools:
                     kwargs["tools"] = tools
@@ -215,7 +243,13 @@ class LLMClient:
                     break
 
         _usage_totals["errors"] += 1
-        log.error("llm_failed", attempts=self.max_retries, last_error=str(last_error))
+        log.error(
+            "llm_failed",
+            attempts=attempt,
+            max_retries=self.max_retries,
+            last_error_type=type(last_error).__name__ if last_error else None,
+            last_error=str(last_error),
+        )
         raise last_error
 
     async def chat(

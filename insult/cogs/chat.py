@@ -36,6 +36,7 @@ from insult.core.presets import PresetMode, PresetModifier
 from insult.core.reactions import add_reactions, parse_reactions, strip_reactions
 from insult.core.reminders import REMINDER_TOOLS, format_reminder_list, parse_remind_at
 from insult.core.summaries import build_server_pulse, filter_by_permissions
+from insult.core.triviality import is_trivial
 
 if TYPE_CHECKING:
     from insult.app import Container
@@ -206,6 +207,12 @@ class ChatCog(commands.Cog):
             )
         except Exception:
             log.exception("chat_store_user_failed", channel_id=channel_id)
+
+        # Cost guard: skip LLM call for trivial messages (ok, gracias, lone emojis, etc.)
+        # Message is already stored above, so context is preserved for the next real turn.
+        if not message.attachments and is_trivial(text):
+            log.info("skipped_trivial_message", channel_id=channel_id, user_id=user_id, text=text[:40])
+            return
 
         try:
             profile = await self.memory.update_profile(user_id, text)
@@ -680,7 +687,9 @@ class ChatCog(commands.Cog):
     ):
         """Background task: extract user facts from recent conversation."""
         try:
-            new_facts = await extract_facts(self.llm.client, self.settings.llm_model, user_name, existing_facts, recent)
+            new_facts = await extract_facts(
+                self.llm.client, self.settings.summary_model, user_name, existing_facts, recent
+            )
             if new_facts != existing_facts:
                 await self.memory.save_facts(user_id, new_facts)
                 # Post new safe facts to system channel

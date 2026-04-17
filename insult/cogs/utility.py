@@ -187,7 +187,9 @@ class UtilityCog(commands.Cog):
 
             try:
                 existing = await self.memory.get_facts(user_id)
-                new_facts = await extract_facts(self.llm.client, self.settings.llm_model, user_name, existing, messages)
+                new_facts = await extract_facts(
+                    self.llm.client, self.settings.summary_model, user_name, existing, messages
+                )
                 await self.memory.save_facts(user_id, new_facts)
                 synced += 1
                 await ctx.send(f"✅ **{user_name}**: {len(new_facts)} facts")

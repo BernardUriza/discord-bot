@@ -79,11 +79,14 @@ async def extract_facts(
     try:
         response = await client.messages.create(
             model=model,
-            max_tokens=2048,
+            max_tokens=4096,
             system=EXTRACTION_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
         )
         raw = response.content[0].text.strip()
+        if response.stop_reason == "max_tokens":
+            log.warning("facts_extraction_truncated", user_name=user_name, output_tokens=response.usage.output_tokens)
+            return existing_facts
 
         # Parse JSON — handle markdown code blocks
         if raw.startswith("```"):

@@ -62,6 +62,12 @@ IDENTITY_REINFORCEMENT_SUFFIX = (
     "Respond in Mexican Spanish with sharp, confrontational tone. You are Insult.]"
 )
 
+# Marker separating cacheable (stable) prompt content from dynamic content.
+# Everything BEFORE this marker is marked cache_control=ephemeral so Anthropic caches it.
+# Everything AFTER is dynamic (time, preset, flows, facts) and changes per request.
+# llm._send detects this marker to build a two-block system prompt.
+CACHE_BOUNDARY = "\n<<<CACHE_BOUNDARY>>>\n"
+
 # ---------------------------------------------------------------------------
 # Anti-pattern detection (post-generation quality check)
 # ---------------------------------------------------------------------------
@@ -548,7 +554,10 @@ def build_adaptive_prompt(
 
     Returns (prompt, preset_selection) so the caller can log the preset.
     """
-    prompt = base_prompt
+    # base_prompt (persona.md) is the only 100% stable section — mark the cache
+    # boundary right after it so the Anthropic cache covers ~15K tokens of persona
+    # across requests. Everything appended below is dynamic.
+    prompt = base_prompt + CACHE_BOUNDARY
 
     # --- Time awareness (always inject) ---
     time_ctx = _get_current_time_context()

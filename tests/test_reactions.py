@@ -50,6 +50,17 @@ class TestParseReactions:
         result = parse_reactions("[REACT:💀][REACT:🔥]")
         assert result == ["💀"]
 
+    def test_concatenated_emojis_without_commas_are_split(self):
+        # Regression: LLM sometimes emits emojis glued without commas (real prod log:
+        # [REACT:🦷🪬🫧🧿🪸🦠]) — Discord rejects the single multi-emoji "token" with
+        # 400 Unknown Emoji. Parser must split concatenated graphemes.
+        result = parse_reactions("[REACT:🦷🪬🫧🧿🪸🦠]")
+        assert result == ["🦷", "🪬", "🫧", "🧿", "🪸", "🦠"]
+
+    def test_mixed_commas_and_concatenation(self):
+        result = parse_reactions("[REACT:💀🔥,😂]")
+        assert result == ["💀", "🔥", "😂"]
+
 
 # --- strip_reactions ---
 
