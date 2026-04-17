@@ -80,6 +80,13 @@ class TestClassifyPreset:
         result = classify_preset("te equivocas, eso no funciona asi")
         assert result.mode == PresetMode.INTELLECTUAL_PRESSURE
 
+    def test_vulgar_correction_triggers_intellectual(self):
+        # Regression: vulgar Spanish corrections used to fall through to DEFAULT_ABRASIVE
+        # (which had no correction protocol), causing servile capitulation.
+        for msg in ["estas mal tu", "te equivocaste cabron", "te pasaste", "no es cierto eso"]:
+            result = classify_preset(msg)
+            assert result.mode == PresetMode.INTELLECTUAL_PRESSURE, f"failed for: {msg!r}"
+
     def test_code_block_triggers_intellectual(self):
         result = classify_preset("mira este codigo:\n```python\ndef foo(): pass\n```")
         assert result.mode == PresetMode.INTELLECTUAL_PRESSURE
@@ -90,8 +97,19 @@ class TestClassifyPreset:
         result = classify_preset("jajaja no mames que pendejo 💀")
         assert result.mode == PresetMode.PLAYFUL_ROAST
 
+    def test_extended_laughter_triggers_playful(self):
+        # Regression: \b(jaja)\b failed to match inside 'jajajajaja' because there
+        # is no word boundary between the repeats. Real user message from prod logs.
+        for msg in ["jajajajaja", "jejejejeje", "JAJAJAJA", "lmaoooo"]:
+            result = classify_preset(msg)
+            assert result.mode == PresetMode.PLAYFUL_ROAST, f"failed for: {msg!r}"
+
     def test_meme_triggers_playful(self):
         result = classify_preset("ese meme esta buenisimo lol")
+        assert result.mode == PresetMode.PLAYFUL_ROAST
+
+    def test_xdd_triggers_playful(self):
+        result = classify_preset("xdd")
         assert result.mode == PresetMode.PLAYFUL_ROAST
 
     # --- ARC (Adaptive Relational Critique) ---

@@ -638,7 +638,7 @@ def build_adaptive_prompt(
             prompt += "\n\n## User Adaptation (adjust your style, NOT your identity)\n"
             prompt += "\n".join(f"- {a}" for a in adaptations)
 
-    # --- Fix #2: Anti-sycophancy — detect sustained agreement ---
+    # --- Fix #2: Anti-sycophancy — detect sustained agreement (reactive) ---
     if recent_messages and len(recent_messages) >= 4:
         # Check last 2 assistant messages for agreement patterns
         assistant_msgs = [m for m in recent_messages if m["role"] == "assistant"][-2:]
@@ -651,6 +651,27 @@ def build_adaptive_prompt(
                 "a counter-argument, a hole in their logic, or a question that forces them to defend "
                 "their position. Sustained agreement is character death for Insult."
             )
+
+    # --- Preventive correction protocol (runs BEFORE the LLM, not after) ---
+    # The reactive guard above only fires AFTER two capitulations have already
+    # shipped. This one inspects the current user message for correction
+    # signals and pre-emptively tells the model how to handle it.
+    correction_signal = re.compile(
+        r"(?i)\b(est[aá]s? mal|te equivocaste|te pasaste|te confundes|te falla|"
+        r"no es cierto|eso no es|no (es )?(as[ií]|verdad)|you'?re wrong|you got it wrong|"
+        r"no (te )?(creo|conf[ií]o)|por eso no conf[ií]o|nel|incorrecto|wrong)\b"
+    )
+    if current_message and correction_signal.search(current_message):
+        prompt += (
+            "\n\n## Correction Protocol (user is pushing back)\n"
+            "The user is contradicting you. Your response MUST do ONE of:\n"
+            "(a) Defend with specifics — cite data, quote the claim, show the reasoning.\n"
+            "(b) Turn it back — 'a ver, muéstrame por qué', force them to bring evidence.\n"
+            "(c) Concede in ONE grudging line and pivot — 'Ok, fair, me equivoqué. Pero...'.\n"
+            "FORBIDDEN: apologizing, self-mocking, 'cierra la boca Insult', 'no sé leer mapas', "
+            "disclaimers of your own competence. Folding without dignity is character death — "
+            "being wrong is recoverable, being servile is not."
+        )
 
     # --- Fix #3: Length variation hint ---
     if recent_response_lengths:

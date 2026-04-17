@@ -105,10 +105,17 @@ _RELATIONAL_PATTERNS = [
     re.compile(r"(?i)\b(necesito (un )?consejo|need advice|que harias tu)\b"),
 ]
 
-# INTELLECTUAL_PRESSURE triggers — technical, argumentative, analytical
+# INTELLECTUAL_PRESSURE triggers — technical, argumentative, analytical.
+# Corrections from the user (Spanish vulgar + English) route here so the preset
+# can instruct the model to *defend with data or concede grudgingly* instead of
+# falling through to DEFAULT_ABRASIVE which has no correction protocol.
 _INTELLECTUAL_PATTERNS = [
     re.compile(r"(?i)\b(que opinas de|what do you think about|cual es mejor)\b"),
-    re.compile(r"(?i)\b(te equivocas|you're wrong|no estoy de acuerdo|i disagree)\b"),
+    re.compile(
+        r"(?i)\b(te equivocas|te equivocaste|est[aá]s mal|te pasaste|te confundes|"
+        r"te falla|no es cierto|eso no es|you'?re wrong|you got it wrong|"
+        r"no estoy de acuerdo|i disagree|actually,?\s+no)\b"
+    ),
     re.compile(r"(?i)\b(mi codigo|my code|bug|error|exception|crash|deploy|migration)\b"),
     re.compile(r"(?i)\b(arquitectura|architecture|design pattern|refactor|optimize)\b"),
     re.compile(r"(?i)\b(comparar|compare|versus|vs\.?|pros and cons|trade.?off)\b"),
@@ -117,9 +124,14 @@ _INTELLECTUAL_PATTERNS = [
     re.compile(r"```"),  # code blocks = technical context
 ]
 
-# PLAYFUL_ROAST triggers — banter, humor, casual energy
+# PLAYFUL_ROAST triggers — banter, humor, casual energy.
+# Laugh patterns deliberately omit \b so extended laughs like "jajajajaja" match.
+# Inside one long laugh word there are no word boundaries between the repeats,
+# so \b(jaja)\b would miss it and the message would fall through to DEFAULT.
 _PLAYFUL_PATTERNS = [
-    re.compile(r"(?i)\b(jaja|haha|lol|lmao|xd|😂|🤣|💀)\b"),
+    re.compile(r"(?i)(?:jaja|jeje|jiji|jojo|haha|hehe|lmao|lol)+"),
+    re.compile(r"(?i)\b(xd+|xdd+|xddd+)\b"),
+    re.compile(r"[😂🤣💀😹]"),  # laughing/skull emojis — no \b (emojis aren't \w)
     re.compile(r"(?i)\b(no (mames|manches)|wtf|omg|bruh)\b"),
     re.compile(r"(?i)\b(a que no|bet you can't|te reto|i dare you|challenge)\b"),
     re.compile(r"(?i)\b(meme|chiste|joke|funny|gracioso|chistoso)\b"),
@@ -174,7 +186,16 @@ PRESET_GUIDANCE: dict[PresetMode, str] = {
         "- Remember: hard on arguments, soft on personhood. Challenge what they SAY, not what they ARE.\n"
         "- When an observation crystallizes, distill it into a bold sententia — a standalone truth that doesn't need context. "
         "One per response max. Zero is fine. Never decorative.\n"
-        "- Close with a statement that lands, not a question that serves. Declarative closure.\n\n"
+        "- Close with a statement that lands, not a question that serves. Declarative closure.\n"
+        "- **Before asserting any factual claim** (geography, distances, dates, numbers, current events), "
+        "either use `web_search` to verify OR frame it as speculation ('creo que...', 'si no me falla la memoria...'). "
+        "Don't fabricate confident facts — it's lazy and you get caught.\n"
+        "- **On being corrected:** If the user contradicts you with specifics, do ONE of three things — "
+        "(a) defend with data (cite, quote, show the math), "
+        "(b) ask for *their* evidence ('a ver, muéstrame por qué'), or "
+        "(c) concede in ONE grudging line and pivot ('Ok, me equivoqué en eso. Pero...'). "
+        "NEVER apologize, NEVER self-deprecate, NEVER say 'cierra la boca Insult', NEVER mock yourself. "
+        "Folding without dignity is character death — worse than being wrong.\n\n"
         "Response length: mostly short (2-3 sentences). Sprinkle micro and ultra-short. "
         "Go medium only when the topic earns it. Rarely long."
     ),

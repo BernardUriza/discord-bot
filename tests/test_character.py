@@ -215,6 +215,29 @@ class TestBuildAdaptivePrompt:
         )
         assert preset.mode == PresetMode.INTELLECTUAL_PRESSURE
 
+    def test_correction_protocol_injected_on_user_pushback(self):
+        # Regression: real Discord incident where user said "estas mal tu jajaja
+        # ay no, ya por eso no confio en ti" and Insult folded with "Nel, tienes
+        # razón. Cierra la boca Insult." The preventive guard must now inject
+        # correction protocol BEFORE the LLM call on any pushback signal.
+        prompt, _ = build_adaptive_prompt(
+            self.BASE_PROMPT,
+            None,
+            5,
+            current_message="estas mal tu jajajajaja ay no, ya por eso no confio en ti",
+        )
+        assert "Correction Protocol" in prompt
+        assert "FORBIDDEN" in prompt
+        assert "Folding without dignity" in prompt
+
+    def test_no_correction_protocol_when_no_pushback(self):
+        prompt, _ = build_adaptive_prompt(self.BASE_PROMPT, None, 5, current_message="hola que tal, que hiciste hoy?")
+        assert "Correction Protocol" not in prompt
+
+    def test_correction_protocol_on_english_pushback(self):
+        prompt, _ = build_adaptive_prompt(self.BASE_PROMPT, None, 5, current_message="you're wrong, the route is fine")
+        assert "Correction Protocol" in prompt
+
     def test_arc_on_system_critique(self):
         prompt, preset = build_adaptive_prompt(
             self.BASE_PROMPT, None, 5, current_message="el capitalismo es explotacion pura"
