@@ -5,6 +5,7 @@ Contexto jerarquico: reciente + relevante (keyword match).
 Append-only: nunca se borra, solo crece.
 """
 
+import contextlib
 import time
 from pathlib import Path
 
@@ -38,8 +39,6 @@ class MemoryStore:
             )
         """)
         # Migration: add for_user_id if upgrading from old schema
-        import contextlib
-
         with contextlib.suppress(aiosqlite.OperationalError):
             await self._db.execute("ALTER TABLE messages ADD COLUMN for_user_id TEXT")
 
@@ -77,6 +76,14 @@ class MemoryStore:
                 updated_at REAL NOT NULL
             )
         """)
+        # Idempotent migration: add 'source' column so we can distinguish
+        # facts written by extract_facts (auto) from curated injections
+        # (manual). save_facts only wipes the auto ones; manual survives
+        # forever. Prior to this column, any manual fact died on the next
+        # conversation turn because save_facts DELETE'd all user_facts rows.
+        with contextlib.suppress(aiosqlite.OperationalError):
+            # Fails silently when the column already exists after first run.
+            await self._db.execute("ALTER TABLE user_facts ADD COLUMN source TEXT NOT NULL DEFAULT 'auto'")
         await self._db.execute("""
             CREATE INDEX IF NOT EXISTS idx_user_facts
             ON user_facts(user_id)
@@ -486,17 +493,27 @@ class MemoryStore:
         return [{"user_id": r[0], "id": r[1], "fact": r[2], "category": r[3], "updated_at": r[4]} for r in rows]
 
     async def save_facts(self, user_id: str, facts: list[dict]):
-        """Replace all facts for a user with new ones (full rewrite per extraction).
+        """Replace AUTO-extracted facts for a user with new ones.
 
-        Each fact dict should have 'fact' and 'category' keys.
+        Facts inserted via `add_manual_fact` (source='manual') are preserved —
+        only rows with source='auto' get wiped and rewritten. This prevents
+        the previous bug where any curated fact died on the next conversation
+        turn, because the LLM only sees the last ~10 messages and routinely
+        omits older facts from its output.
+
+        Each fact dict should have 'fact' and 'category' keys. All inserts
+        here are marked source='auto'; use `add_manual_fact` for curated ones.
         """
         await self._ensure_connection()
         now = time.time()
         try:
-            await self._db.execute("DELETE FROM user_facts WHERE user_id = ?", (user_id,))
+            await self._db.execute(
+                "DELETE FROM user_facts WHERE user_id = ? AND source = 'auto'",
+                (user_id,),
+            )
             for f in facts:
                 await self._db.execute(
-                    "INSERT INTO user_facts (user_id, fact, category, updated_at) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO user_facts (user_id, fact, category, updated_at, source) VALUES (?, ?, ?, ?, 'auto')",
                     (user_id, f["fact"], f.get("category", "general"), now),
                 )
             await self._db.commit()
@@ -512,6 +529,33 @@ class MemoryStore:
                     log.warning("facts_vector_upsert_failed", user_id=user_id, error=str(ve))
         except aiosqlite.Error as e:
             log.error("facts_save_failed", user_id=user_id, error=str(e))
+
+    async def add_manual_fact(
+        self,
+        user_id: str,
+        fact: str,
+        category: str = "general",
+    ) -> int:
+        """Insert a curated fact marked source='manual' so extract_facts can't wipe it.
+
+        Returns the inserted row id. Manual facts are intended for:
+        - Human-curated injections from chat operators
+        - Important incidents the LLM omitted on its own
+        - Signals other users gave about the target (cross-user attribution)
+
+        Caller is responsible for deduping if they care — this is an append,
+        not an upsert.
+        """
+        await self._ensure_connection()
+        now = time.time()
+        cursor = await self._db.execute(
+            "INSERT INTO user_facts (user_id, fact, category, updated_at, source) VALUES (?, ?, ?, ?, 'manual')",
+            (user_id, fact, category, now),
+        )
+        await self._db.commit()
+        row_id = cursor.lastrowid
+        log.info("manual_fact_added", user_id=user_id, fact_id=row_id, category=category)
+        return row_id or 0
 
     async def search_facts_semantic(self, user_id: str, query: str, limit: int = 10) -> list[dict]:
         """Search user facts by semantic similarity using hybrid vector + FTS search.
