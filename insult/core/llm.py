@@ -22,65 +22,111 @@ from insult.core.character import (
 log = structlog.get_logger()
 
 # --- Token usage tracking (in-memory, resets on redeploy) ---
-# Pricing per million tokens (Sonnet 4, as of 2026)
-_PRICING = {
-    "input": 3.00,  # $/M input tokens
-    "output": 15.00,  # $/M output tokens
-    "cache_read": 0.30,  # $/M cache read tokens (90% discount)
-    "cache_create": 3.75,  # $/M cache creation tokens (25% premium)
+# Pricing per million tokens, per model family (as of 2026-04).
+# Keys are the family tag returned by _resolve_family(); Sonnet is the
+# fallback for unknown models (conservative — overestimates Haiku slightly
+# but never understates Opus which would mask a blown budget).
+_PRICING: dict[str, dict[str, float]] = {
+    "haiku": {"input": 1.00, "output": 5.00, "cache_read": 0.10, "cache_create": 1.25},
+    "sonnet": {"input": 3.00, "output": 15.00, "cache_read": 0.30, "cache_create": 3.75},
+    "opus": {"input": 15.00, "output": 75.00, "cache_read": 1.50, "cache_create": 18.75},
 }
+_DEFAULT_FAMILY = "sonnet"
 
-_usage_totals = {
-    "input_tokens": 0,
-    "output_tokens": 0,
-    "cache_read_tokens": 0,
-    "cache_create_tokens": 0,
-    "requests": 0,
-    "errors": 0,
-}
+
+def _resolve_family(model: str) -> str:
+    """Map a full model id to its pricing family.
+
+    claude-haiku-4-5-20251001 → 'haiku', claude-sonnet-4-6 → 'sonnet', etc.
+    Unknown models default to Sonnet (conservative — overestimates Haiku
+    slightly but never understates Opus, which would hide a blown budget).
+    """
+    lower = model.lower()
+    for family in _PRICING:
+        if family in lower:
+            return family
+    return _DEFAULT_FAMILY
+
+
+def _zero_bucket() -> dict[str, int]:
+    return {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_create_tokens": 0, "requests": 0}
+
+
+# Per-family token counters. Keys populated lazily as families are seen.
+_usage_by_family: dict[str, dict[str, int]] = {}
+_errors_total = 0
 
 # Anti-pattern fallback threshold: number of pattern hits that triggers a
 # rerun against the fallback model. Below this the hit is only logged.
 _ANTI_PATTERN_FALLBACK_THRESHOLD = 2
 
 
-def record_usage(input_tokens: int, output_tokens: int, cache_read: int = 0, cache_create: int = 0) -> None:
-    """Accumulate token usage for cost tracking."""
-    _usage_totals["input_tokens"] += input_tokens
-    _usage_totals["output_tokens"] += output_tokens
-    _usage_totals["cache_read_tokens"] += cache_read
-    _usage_totals["cache_create_tokens"] += cache_create
-    _usage_totals["requests"] += 1
+def record_usage(
+    input_tokens: int,
+    output_tokens: int,
+    cache_read: int = 0,
+    cache_create: int = 0,
+    model: str = "",
+) -> None:
+    """Accumulate token usage for cost tracking, keyed by model family."""
+    family = _resolve_family(model) if model else _DEFAULT_FAMILY
+    bucket = _usage_by_family.setdefault(family, _zero_bucket())
+    bucket["input_tokens"] += input_tokens
+    bucket["output_tokens"] += output_tokens
+    bucket["cache_read_tokens"] += cache_read
+    bucket["cache_create_tokens"] += cache_create
+    bucket["requests"] += 1
+
+
+def _record_error() -> None:
+    global _errors_total
+    _errors_total += 1
 
 
 def get_usage_report() -> dict:
-    """Return accumulated usage with estimated cost in USD."""
-    t = _usage_totals
-    cost_input = (t["input_tokens"] / 1_000_000) * _PRICING["input"]
-    cost_output = (t["output_tokens"] / 1_000_000) * _PRICING["output"]
-    cost_cache_read = (t["cache_read_tokens"] / 1_000_000) * _PRICING["cache_read"]
-    cost_cache_create = (t["cache_create_tokens"] / 1_000_000) * _PRICING["cache_create"]
-    total_cost = cost_input + cost_output + cost_cache_read + cost_cache_create
+    """Return accumulated usage with estimated cost in USD, broken out per family."""
+    per_family: dict[str, dict] = {}
+    total_tokens_in = 0
+    total_tokens_out = 0
+    total_cache_read = 0
+    total_cache_create = 0
+    total_requests = 0
+    total_cost = 0.0
+
+    for family, bucket in _usage_by_family.items():
+        pricing = _PRICING.get(family, _PRICING[_DEFAULT_FAMILY])
+        cost_input = (bucket["input_tokens"] / 1_000_000) * pricing["input"]
+        cost_output = (bucket["output_tokens"] / 1_000_000) * pricing["output"]
+        cost_cache_read = (bucket["cache_read_tokens"] / 1_000_000) * pricing["cache_read"]
+        cost_cache_create = (bucket["cache_create_tokens"] / 1_000_000) * pricing["cache_create"]
+        family_cost = cost_input + cost_output + cost_cache_read + cost_cache_create
+
+        per_family[family] = {
+            "tokens": dict(bucket),
+            "cost_usd": round(family_cost, 4),
+        }
+
+        total_tokens_in += bucket["input_tokens"]
+        total_tokens_out += bucket["output_tokens"]
+        total_cache_read += bucket["cache_read_tokens"]
+        total_cache_create += bucket["cache_create_tokens"]
+        total_requests += bucket["requests"]
+        total_cost += family_cost
 
     return {
         "tokens": {
-            "input": t["input_tokens"],
-            "output": t["output_tokens"],
-            "cache_read": t["cache_read_tokens"],
-            "cache_create": t["cache_create_tokens"],
-            "total": t["input_tokens"] + t["output_tokens"],
+            "input": total_tokens_in,
+            "output": total_tokens_out,
+            "cache_read": total_cache_read,
+            "cache_create": total_cache_create,
+            "total": total_tokens_in + total_tokens_out,
         },
-        "requests": t["requests"],
-        "errors": t["errors"],
-        "cost_usd": {
-            "input": round(cost_input, 4),
-            "output": round(cost_output, 4),
-            "cache_read": round(cost_cache_read, 4),
-            "cache_create": round(cost_cache_create, 4),
-            "total": round(total_cost, 4),
-        },
-        "avg_tokens_per_request": round((t["input_tokens"] + t["output_tokens"]) / max(t["requests"], 1)),
-        "note": "Resets on redeploy. Pricing based on Sonnet 4 rates.",
+        "requests": total_requests,
+        "errors": _errors_total,
+        "cost_usd": {"total": round(total_cost, 4)},
+        "per_family": per_family,
+        "avg_tokens_per_request": round((total_tokens_in + total_tokens_out) / max(total_requests, 1)),
+        "note": "Resets on redeploy. Pricing is per-family (haiku/sonnet/opus); unknown models default to sonnet rates.",
     }
 
 
@@ -217,7 +263,13 @@ class LLMClient:
                     cache_create=cache_create,
                     stop_reason=response.stop_reason,
                 )
-                record_usage(response.usage.input_tokens, response.usage.output_tokens, cache_read, cache_create)
+                record_usage(
+                    response.usage.input_tokens,
+                    response.usage.output_tokens,
+                    cache_read,
+                    cache_create,
+                    model=effective_model,
+                )
                 parsed = _parse_response_content(response.content)
                 parsed.model_used = effective_model
                 return parsed
@@ -263,7 +315,7 @@ class LLMClient:
                     log.error("llm_api_error", status=e.status_code, error=str(e))
                     break
 
-        _usage_totals["errors"] += 1
+        _record_error()
         log.error(
             "llm_failed",
             attempts=attempt,
@@ -410,8 +462,26 @@ class LLMClient:
                         system_prompt, messages, tools=tools, tool_choice=tool_choice, model=fallback
                     )
                     rerun.text = strip_metadata(rerun.text)
-                    # Don't re-chain break detection here; fall through to the normal post-processing.
-                    response = rerun
+                    # Revalidate: the fallback model can still produce a break.
+                    # If it does, route through the same recovery pipeline used
+                    # for break-on-primary, but treat the fallback output as
+                    # the "original" so we don't double-escalate to itself.
+                    rerun_breaks = detect_break(rerun.text)
+                    if rerun_breaks:
+                        log.warning("character_break_on_antipattern_rerun", model=fallback, patterns=rerun_breaks)
+                        recovered = await self._recover_from_break(
+                            rerun,
+                            system_prompt,
+                            messages,
+                            tools,
+                            tool_choice,
+                            fallback,
+                            fallback,
+                            has_distinct_fallback=False,
+                        )
+                        response = recovered if recovered is not None else rerun
+                    else:
+                        response = rerun
                 except Exception:
                     log.warning("model_fallback_rerun_failed", from_model=primary, to_model=fallback)
 

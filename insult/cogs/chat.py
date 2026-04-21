@@ -373,8 +373,6 @@ class ChatCog(commands.Cog):
                 disclosure_severity=disclosure.severity,
                 user_id=user_id,
             )
-            if model_choice.tier == ModelTier.CRISIS:
-                self._opus_budget.record(user_id)
 
         try:
             async with message.channel.typing():
@@ -387,6 +385,11 @@ class ChatCog(commands.Cog):
             log.exception("chat_llm_failed", channel_id=channel_id, error_type=type(e).__name__)
             await message.channel.send(get_error_response(classify_error(e)))
             return
+
+        # Opus budget: record only after a successful call so transient failures
+        # don't spend the user's 24h cap on requests that never produced output.
+        if model_choice is not None and model_choice.tier == ModelTier.CRISIS:
+            self._opus_budget.record(user_id)
 
         response = llm_response.text
 
