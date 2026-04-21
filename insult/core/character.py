@@ -480,12 +480,32 @@ _METADATA_PATTERNS = [
     # CACHE_BOUNDARY marker — if the model ever echoes the prompt-cache delimiter,
     # strip it so users never see the internal structure leaking.
     re.compile(r"<<<CACHE_BOUNDARY>>>\n?"),
+    # Scratchpad-style XML tags the model sometimes emits as internal reasoning
+    # then forgets to delete. Real prod leak 2026-04-20:
+    # "<input>...</input>\n\n<output>...</output>". Strip the tags only — keep
+    # the inner text so a single useful sentence doesn't get nuked along with
+    # the wrapper. If the model duplicates input==output, the second pass of
+    # normalize_formatting collapses the repetition.
+    re.compile(r"</?(?:input|output|thinking|scratchpad|scratch|reasoning|draft)>", re.IGNORECASE),
     # NOTE: [REACT:] is NOT stripped here — chat.py parses it first.
 ]
 
 
+# Scratchpad "draft + final" pattern: the model sometimes writes
+#   <input>TEXT_A</input>\n\n<output>TEXT_B</output>
+# where TEXT_A is its reasoning and TEXT_B is the intended reply (often
+# identical). Collapse the whole block to just TEXT_B before the generic
+# tag stripper runs — that way we don't end up with TEXT_A and TEXT_B both
+# visible when they're the same string.
+_SCRATCHPAD_BLOCK = re.compile(
+    r"<input>.*?</input>\s*<output>(.*?)</output>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
 def strip_metadata(text: str) -> str:
-    """Remove leaked timestamps and speaker labels from model output."""
+    """Remove leaked timestamps, speaker labels, and scratchpad markup."""
+    text = _SCRATCHPAD_BLOCK.sub(r"\1", text)
     for pattern in _METADATA_PATTERNS:
         text = pattern.sub("", text)
     return text.strip()

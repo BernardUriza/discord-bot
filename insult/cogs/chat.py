@@ -370,21 +370,25 @@ class ChatCog(commands.Cog):
         reactions = parse_reactions(response)
         response = strip_reactions(response)
 
-        # Store the full response in memory
+        # Store the full response in memory. Skip if the turn produced NO text
+        # (reaction-only responses) — writing empty rows pollutes the conversation
+        # context the next build pulls in, and the reaction itself is a side
+        # effect on the USER'S message, not a conversational turn of its own.
         clean_response = response.replace(MESSAGE_DELIMITER, "\n")
-        try:
-            await self.memory.store(
-                channel_id,
-                str(self.bot.user.id),
-                self.bot.user.name,
-                "assistant",
-                clean_response,
-                for_user_id=user_id,
-                guild_id=guild_id,
-                channel_name=channel_name,
-            )
-        except Exception:
-            log.exception("chat_store_response_failed", channel_id=channel_id)
+        if clean_response.strip():
+            try:
+                await self.memory.store(
+                    channel_id,
+                    str(self.bot.user.id),
+                    self.bot.user.name,
+                    "assistant",
+                    clean_response,
+                    for_user_id=user_id,
+                    guild_id=guild_id,
+                    channel_name=channel_name,
+                )
+            except Exception:
+                log.exception("chat_store_response_failed", channel_id=channel_id)
 
         # --- Phase 1 (v3.0.0): Update arc state + extract stances ---
         new_arc = update_arc(

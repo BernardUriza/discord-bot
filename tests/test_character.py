@@ -250,6 +250,32 @@ class TestBuildAdaptivePrompt:
         assert "Respuesta normal." in cleaned
         assert "Más texto" in cleaned
 
+    def test_scratchpad_xml_tags_stripped(self):
+        # Regression v3.4.5: real prod leak where the model emitted
+        # "<input>X</input>\n\n<output>X</output>" as scratchpad. The collapsed
+        # output should contain only the inner payload, no tags, no duplication
+        # when input == output.
+        from insult.core.character import strip_metadata
+
+        duplicated = (
+            "<input>La pobreza siempre cobró en carne.</input>\n\n<output>La pobreza siempre cobró en carne.</output>"
+        )
+        cleaned = strip_metadata(duplicated)
+        assert "<input>" not in cleaned
+        assert "</input>" not in cleaned
+        assert "<output>" not in cleaned
+        assert "</output>" not in cleaned
+        # Text should appear exactly once
+        assert cleaned.count("La pobreza siempre cobró en carne.") == 1
+
+    def test_standalone_scratchpad_tags_also_stripped(self):
+        # Catches partial leaks where only one tag shows up (e.g. model opens
+        # <thinking> and forgets to close, or only <output> on its own).
+        from insult.core.character import strip_metadata
+
+        for tag in ["<thinking>", "</thinking>", "<scratchpad>", "<draft>", "<reasoning>"]:
+            assert tag not in strip_metadata(f"Texto {tag} más texto.")
+
     def test_length_hint_suppressed_when_correction_fires(self):
         # v3.4.3: stacking length_hint on top of Correction Protocol over-compressed.
         from insult.core.character import build_adaptive_prompt as bap
