@@ -138,22 +138,30 @@ _PLAYFUL_PATTERNS = [
     re.compile(r"(?i)\b(que (random|raro|weird)|thats (random|weird))\b"),
 ]
 
-# ACTION_INTENT modifier triggers — user wants channel creation, info, or editing
+# ACTION_INTENT modifier triggers — user wants channel creation, info, or editing.
+# EVERY pattern below MUST require the word canal/channel/espacio/sala/room in
+# the same sentence. Previous version matched "cambia ... nombre" without any
+# channel noun, producing false positives on metaphors like "cambia el nombre
+# al sistema para ponerles armas y uniformes" — which forced a tool call the
+# user never requested. Proximity limit {0,40} keeps phrases local instead of
+# spanning half a paragraph via greedy .*
+_CHANNEL_NOUN = r"(?:canal|channel|espacio|space|sala|room)"
 _ACTION_INTENT_PATTERNS = [
-    # Channel creation
-    re.compile(r"(?i)\b(crea|crear|hazme|haz|arma|armame|pon|ponme)\b.*(canal|channel|espacio|space|sala|room)", re.S),
-    re.compile(r"(?i)\b(canal|channel|espacio|space)\b.*(crea|crear|haz|hazme|nuevo|new|privado|private)", re.S),
+    # Channel creation — verb + channel noun nearby
+    re.compile(rf"(?i)\b(crea|crear|hazme|haz|arma|armame|pon|ponme)\b.{{0,40}}\b{_CHANNEL_NOUN}\b"),
+    re.compile(rf"(?i)\b{_CHANNEL_NOUN}\b.{{0,40}}\b(crea|crear|haz|hazme|nuevo|new|privado|private)\b"),
+    re.compile(rf"(?i)\b(necesito|quiero|dame|give me|i need|i want)\b.{{0,40}}\b{_CHANNEL_NOUN}\b"),
+    re.compile(rf"(?i)\b(create|make|set up)\b.{{0,40}}\b{_CHANNEL_NOUN}\b"),
+    # Channel info / editing — verb + channel noun + field
+    re.compile(rf"(?i)\b(cambia|cambiar|renombra|rename|edita|edit)\b.{{0,40}}\b{_CHANNEL_NOUN}\b"),
+    re.compile(rf"(?i)\b{_CHANNEL_NOUN}\b.{{0,40}}\b(se llama|nombre|name|descripcion|description|topic)\b"),
     re.compile(
-        r"(?i)\b(necesito|quiero|dame|give me|i need|i want)\b.*(canal|channel|espacio|space|privado|private)", re.S
+        rf"(?i)\b(ponle|cambiale|dale)\b.{{0,60}}\b{_CHANNEL_NOUN}\b.{{0,40}}\b(nombre|descripci[oó]n|description|topic)\b"
     ),
-    re.compile(r"(?i)\b(create|make|set up)\b.*(channel|space|room)", re.S),
-    # Channel info / editing
+    # Same verbs but inverted order: "ponle descripción al canal"
     re.compile(
-        r"(?i)\b(cambia|cambiar|renombra|rename|edita|edit)\b.*(canal|channel|nombre|name|descripcion|description|topic)",
-        re.S,
+        rf"(?i)\b(ponle|cambiale|dale)\b.{{0,60}}\b(nombre|descripci[oó]n|description|topic)\b.{{0,40}}\b{_CHANNEL_NOUN}\b"
     ),
-    re.compile(r"(?i)\b(canal|channel)\b.*(se llama|nombre|name|descripcion|description|topic)", re.S),
-    re.compile(r"(?i)\b(ponle|cambiale|dale)\b.*(nombre|descripcion|description|topic)", re.S),
 ]
 
 # Stopwords filtered out when checking memory recall overlap
