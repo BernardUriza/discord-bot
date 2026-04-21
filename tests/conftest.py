@@ -70,6 +70,11 @@ def mock_settings():
     s.llm_max_tokens = 1024
     s.discord_token = "fake-token"  # noqa: S105
     s.anthropic_api_key = "fake-key"
+    # Router feature flag OFF in tests — legacy single-model path.
+    s.model_router_enabled = False
+    s.casual_model = "claude-haiku-4-5-20251001"
+    s.crisis_model = "claude-opus-4-7"
+    s.opus_24h_cap = 20
     return s
 
 

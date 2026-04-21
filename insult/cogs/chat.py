@@ -35,6 +35,7 @@ from insult.core.llm import WEB_SEARCH_TOOL
 from insult.core.presets import PresetMode, PresetModifier
 from insult.core.reactions import add_reactions, parse_reactions, strip_reactions
 from insult.core.reminders import REMINDER_TOOLS, format_reminder_list, parse_remind_at
+from insult.core.routing import ModelTier, OpusBudget, select_model
 from insult.core.summaries import build_server_pulse, filter_by_permissions
 from insult.core.triviality import is_trivial
 
@@ -73,6 +74,8 @@ class ChatCog(commands.Cog):
         # Message batching: accumulate rapid messages, respond to the batch
         self._pending_batches: dict[str, _MessageBatch] = {}  # key: "{channel_id}:{user_id}"
         self._last_response_time: dict[int, float] = {}  # user_id → monotonic timestamp
+        # Opus budget counter — per-user rolling 24h, used by the 3-tier router
+        self._opus_budget = OpusBudget(cap=getattr(self.settings, "opus_24h_cap", 20))
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -346,9 +349,40 @@ class ChatCog(commands.Cog):
         force_tool = PresetModifier.ACTION_INTENT in preset.modifiers
         tool_choice = {"type": "any"} if force_tool else None
 
+        # 3-tier router: pick primary/fallback models. Gated by feature flag —
+        # when disabled the bot uses self.llm.model for every turn (legacy path).
+        model_choice = None
+        if getattr(self.settings, "model_router_enabled", False):
+            model_choice = select_model(
+                preset,
+                flow_analysis,
+                disclosure.severity,
+                casual_model=self.settings.casual_model,
+                depth_model=self.settings.llm_model,
+                crisis_model=self.settings.crisis_model,
+                opus_24h_count=self._opus_budget.count(user_id),
+                opus_24h_cap=self._opus_budget.cap,
+            )
+            log.info(
+                "model_routed",
+                tier=model_choice.tier.value,
+                primary=model_choice.primary,
+                fallback=model_choice.fallback,
+                reason=model_choice.reason,
+                preset=preset.mode.value,
+                disclosure_severity=disclosure.severity,
+                user_id=user_id,
+            )
+            if model_choice.tier == ModelTier.CRISIS:
+                self._opus_budget.record(user_id)
+
         try:
             async with message.channel.typing():
-                llm_response = await self.llm.chat(system_prompt, context, tools=tools, tool_choice=tool_choice)
+                llm_kwargs = {"tools": tools, "tool_choice": tool_choice}
+                if model_choice is not None:
+                    llm_kwargs["model"] = model_choice.primary
+                    llm_kwargs["fallback_model"] = model_choice.fallback
+                llm_response = await self.llm.chat(system_prompt, context, **llm_kwargs)
         except Exception as e:
             log.exception("chat_llm_failed", channel_id=channel_id, error_type=type(e).__name__)
             await message.channel.send(get_error_response(classify_error(e)))
@@ -386,6 +420,7 @@ class ChatCog(commands.Cog):
                     for_user_id=user_id,
                     guild_id=guild_id,
                     channel_name=channel_name,
+                    model_used=llm_response.model_used or None,
                 )
             except Exception:
                 log.exception("chat_store_response_failed", channel_id=channel_id)

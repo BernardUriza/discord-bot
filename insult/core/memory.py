@@ -48,6 +48,10 @@ class MemoryStore:
         with contextlib.suppress(aiosqlite.OperationalError):
             await self._db.execute("ALTER TABLE messages ADD COLUMN channel_name TEXT")
 
+        # Migration: model_used — which model produced an assistant turn (router telemetry)
+        with contextlib.suppress(aiosqlite.OperationalError):
+            await self._db.execute("ALTER TABLE messages ADD COLUMN model_used TEXT")
+
         await self._db.execute("""
             CREATE INDEX IF NOT EXISTS idx_channel_ts
             ON messages(channel_id, timestamp DESC)
@@ -264,6 +268,7 @@ class MemoryStore:
         for_user_id: str | None = None,
         guild_id: str | None = None,
         channel_name: str | None = None,
+        model_used: str | None = None,
     ):
         """Guarda un mensaje en la memoria longitudinal.
 
@@ -272,13 +277,26 @@ class MemoryStore:
                          Enables per-user context isolation.
             guild_id: Discord guild (server) ID for cross-channel awareness.
             channel_name: Human-readable channel name for summaries.
+            model_used: For assistant turns, the model that actually produced
+                the text (router telemetry). None for user turns.
         """
         await self._ensure_connection()
         try:
             await self._db.execute(
-                "INSERT INTO messages (channel_id, user_id, user_name, role, content, timestamp, for_user_id, guild_id, channel_name) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (channel_id, user_id, user_name, role, content, time.time(), for_user_id, guild_id, channel_name),
+                "INSERT INTO messages (channel_id, user_id, user_name, role, content, timestamp, for_user_id, guild_id, channel_name, model_used) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    channel_id,
+                    user_id,
+                    user_name,
+                    role,
+                    content,
+                    time.time(),
+                    for_user_id,
+                    guild_id,
+                    channel_name,
+                    model_used,
+                ),
             )
             await self._db.commit()
         except aiosqlite.Error as e:

@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     system_prompt: str = "You are a helpful assistant."
     persona_file: Path = _PROJECT_ROOT / "persona.md"
 
+    # Model Router (3-tier: casual/depth/crisis). See .claude/plans/model_router.md.
+    # llm_model above acts as the DEPTH tier when the router is enabled.
+    model_router_enabled: bool = False
+    casual_model: str = "claude-haiku-4-5-20251001"
+    crisis_model: str = "claude-opus-4-7"
+    opus_24h_cap: int = 20
+
     # Memory
     memory_recent_limit: int = 50
     memory_relevant_limit: int = 5

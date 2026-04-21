@@ -39,6 +39,10 @@ _usage_totals = {
     "errors": 0,
 }
 
+# Anti-pattern fallback threshold: number of pattern hits that triggers a
+# rerun against the fallback model. Below this the hit is only logged.
+_ANTI_PATTERN_FALLBACK_THRESHOLD = 2
+
 
 def record_usage(input_tokens: int, output_tokens: int, cache_read: int = 0, cache_create: int = 0) -> None:
     """Accumulate token usage for cost tracking."""
@@ -86,6 +90,7 @@ class LLMResponse:
 
     text: str
     tool_calls: list[ToolCall] = field(default_factory=list)
+    model_used: str = ""  # populated by chat() — reflects the model that actually produced the text
 
 
 # Web search tool definition — Claude's native server-side search
@@ -167,10 +172,17 @@ class LLMClient:
         *,
         tools: list[dict] | None = None,
         tool_choice: dict | None = None,
+        model: str | None = None,
     ) -> LLMResponse:
-        """Raw API call with retry logic for transient errors."""
+        """Raw API call with retry logic for transient errors.
+
+        `model` overrides self.model for this call only (used by the 3-tier
+        router to route per-turn). Defaults to self.model when None.
+        """
         if self.max_retries < 1:
             raise ValueError(f"max_retries must be >= 1, got {self.max_retries}")
+
+        effective_model = model or self.model
 
         last_error: Exception | None = None
         attempt = 0
@@ -181,9 +193,9 @@ class LLMClient:
 
         for attempt in range(1, self.max_retries + 1):
             try:
-                log.info("llm_request", model=self.model, attempt=attempt, messages=len(messages))
+                log.info("llm_request", model=effective_model, attempt=attempt, messages=len(messages))
                 kwargs = {
-                    "model": self.model,
+                    "model": effective_model,
                     "max_tokens": self.max_tokens,
                     "system": _build_system_blocks(system_prompt),
                     "messages": messages,
@@ -198,7 +210,7 @@ class LLMClient:
                 cache_create = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
                 log.info(
                     "llm_response",
-                    model=self.model,
+                    model=effective_model,
                     input_tokens=response.usage.input_tokens,
                     output_tokens=response.usage.output_tokens,
                     cache_read=cache_read,
@@ -206,7 +218,9 @@ class LLMClient:
                     stop_reason=response.stop_reason,
                 )
                 record_usage(response.usage.input_tokens, response.usage.output_tokens, cache_read, cache_create)
-                return _parse_response_content(response.content)
+                parsed = _parse_response_content(response.content)
+                parsed.model_used = effective_model
+                return parsed
 
             except anthropic.RateLimitError as e:
                 last_error = e
@@ -265,6 +279,79 @@ class LLMClient:
             raise RuntimeError("llm._send exited loop without last_error set")
         raise last_error
 
+    async def _recover_from_break(
+        self,
+        original: LLMResponse,
+        system_prompt: str,
+        messages: list[MessageParam],
+        tools: list[dict] | None,
+        tool_choice: dict | None,
+        primary: str,
+        fallback: str,
+        has_distinct_fallback: bool,
+    ) -> LLMResponse | None:
+        """Handle a character break on the primary response.
+
+        If a distinct fallback tier is available, rerun against it first (no
+        reinforced prompt — let the smarter reasoner do the work). If the
+        fallback also breaks, or no fallback is available, apply the legacy
+        reinforced-retry path. Returns the recovered response, or None if
+        every path failed — in which case `original.text` is sanitized in
+        place so the caller can still ship something.
+        """
+        if has_distinct_fallback:
+            log.info(
+                "model_fallback_triggered",
+                reason="character_break",
+                from_model=primary,
+                to_model=fallback,
+            )
+            try:
+                fb = await self._send(system_prompt, messages, tools=tools, tool_choice=tool_choice, model=fallback)
+                fb.text = strip_metadata(fb.text)
+                if not detect_break(fb.text):
+                    log.info("character_break_fixed_on_fallback", from_model=primary, to_model=fallback)
+                    return fb
+                log.warning("character_break_persisted_on_fallback", to_model=fallback)
+                # Proceed to reinforced-retry against the fallback tier.
+                primary_for_reinforcement = fallback
+                original_for_sanitize = fb
+            except Exception:
+                log.warning("model_fallback_rerun_failed", from_model=primary, to_model=fallback)
+                primary_for_reinforcement = primary
+                original_for_sanitize = original
+        else:
+            primary_for_reinforcement = primary
+            original_for_sanitize = original
+
+        reinforced_prompt = system_prompt + CHARACTER_REINFORCEMENT
+        try:
+            retry_response = await self._send(
+                reinforced_prompt,
+                messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                model=primary_for_reinforcement,
+            )
+            retry_response.text = strip_metadata(retry_response.text)
+            retry_breaks = detect_break(retry_response.text)
+
+            if not retry_breaks:
+                log.info("character_break_fixed_on_retry", model=primary_for_reinforcement)
+                return retry_response
+
+            log.warning("character_break_persisted", retry_patterns=retry_breaks)
+            retry_response.text = sanitize(retry_response.text)
+            return retry_response
+
+        except Exception:
+            log.warning("character_break_retry_failed_using_sanitized_original")
+            original_for_sanitize.text = sanitize(original_for_sanitize.text)
+            # Overwrite the caller's view so it ends up with the sanitized text.
+            original.text = original_for_sanitize.text
+            original.model_used = original_for_sanitize.model_used
+            return None
+
     async def chat(
         self,
         system_prompt: str,
@@ -272,43 +359,61 @@ class LLMClient:
         *,
         tools: list[dict] | None = None,
         tool_choice: dict | None = None,
+        model: str | None = None,
+        fallback_model: str | None = None,
     ) -> LLMResponse:
         """Send messages with optional tools, detect character breaks, retry if needed.
 
+        Args:
+            model: If provided, overrides self.model for this call (router primary).
+            fallback_model: Second-tier model to retry against when the primary
+                produces a character break or >=2 anti-pattern hits. When None
+                or equal to `model`, falls back to the legacy reinforced-retry
+                path against the same model (original behavior).
+
         Returns LLMResponse with text (for Discord) and tool_calls (for actions).
         """
-        response = await self._send(system_prompt, messages, tools=tools, tool_choice=tool_choice)
+        primary = model or self.model
+        fallback = fallback_model or primary
+        has_distinct_fallback = fallback != primary
+
+        response = await self._send(system_prompt, messages, tools=tools, tool_choice=tool_choice, model=primary)
 
         # Strip leaked metadata (timestamps, speaker labels) before any other processing
         response.text = strip_metadata(response.text)
 
         breaks = detect_break(response.text)
         if breaks:
-            log.warning("character_break_detected", patterns=breaks)
-
-            reinforced_prompt = system_prompt + CHARACTER_REINFORCEMENT
-            try:
-                retry_response = await self._send(reinforced_prompt, messages, tools=tools, tool_choice=tool_choice)
-                retry_response.text = strip_metadata(retry_response.text)
-                retry_breaks = detect_break(retry_response.text)
-
-                if not retry_breaks:
-                    log.info("character_break_fixed_on_retry")
-                    return retry_response
-
-                log.warning("character_break_persisted", retry_patterns=retry_breaks)
-                retry_response.text = sanitize(retry_response.text)
+            log.warning("character_break_detected", model=primary, patterns=breaks)
+            retry_response = await self._recover_from_break(
+                response, system_prompt, messages, tools, tool_choice, primary, fallback, has_distinct_fallback
+            )
+            if retry_response is not None:
                 return retry_response
+            # _recover_from_break already sanitized the original response in-place on total failure
+            return response
 
-            except Exception:
-                log.warning("character_break_retry_failed_using_sanitized_original")
-                response.text = sanitize(response.text)
-                return response
-
-        # Log anti-pattern drift (soft violations — doesn't block, just monitors)
+        # Log anti-pattern drift — soft escalate to the fallback tier when distinct.
         anti_patterns = detect_anti_patterns(response.text)
         if anti_patterns:
-            log.warning("anti_pattern_detected", patterns=anti_patterns)
+            log.warning("anti_pattern_detected", model=primary, patterns=anti_patterns)
+            if has_distinct_fallback and len(anti_patterns) >= _ANTI_PATTERN_FALLBACK_THRESHOLD:
+                log.info(
+                    "model_fallback_triggered",
+                    reason="anti_pattern",
+                    from_model=primary,
+                    to_model=fallback,
+                    hits=len(anti_patterns),
+                )
+                try:
+                    rerun = await self._send(
+                        system_prompt, messages, tools=tools, tool_choice=tool_choice, model=fallback
+                    )
+                    rerun.text = strip_metadata(rerun.text)
+                    # Don't re-chain break detection here; fall through to the normal post-processing.
+                    response = rerun
+                except Exception:
+                    log.warning("model_fallback_rerun_failed", from_model=primary, to_model=fallback)
 
         # Step 7c: Language Cure — normalize mixed-language output via Haiku
         if self.cure_model and response.text:
