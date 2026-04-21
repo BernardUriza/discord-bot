@@ -8,9 +8,23 @@ This is step 7c in the post-generation pipeline, after character guard
 and before delivery.
 """
 
+import re
+
 import structlog
 
 log = structlog.get_logger()
+
+# Matches any <output>...</output>, <response>...</response>, <input>...</input>
+# wrapper that Haiku might add around its entire reply, even with leading or
+# trailing whitespace / newlines. DOTALL so payload can span lines.
+_FULL_WRAPPER_RE = re.compile(
+    r"^\s*<(output|response|input)>(.*?)</\1>\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# Leftover "→ " prefix from the few-shot arrow style (bounded — will not
+# consume multiple arrows in a row, just the single expected one).
+_LEADING_ARROW_RE = re.compile(r"^\s*→\s*")
 
 LANGUAGE_CURE_SYSTEM = """\
 You are a Spanish language normalizer for a Mexican chatbot.
@@ -86,19 +100,14 @@ async def language_cure(
             return text
 
         # Strip stray wrappers Haiku sometimes adds despite the instruction.
-        # Handles <output>X</output>, <response>X</response>, and an initial
-        # "→ " left over from the few-shot arrow style.
-        wrapper_pairs = [
-            ("<output>", "</output>"),
-            ("<response>", "</response>"),
-            ("<input>", "</input>"),
-        ]
-        for open_tag, close_tag in wrapper_pairs:
-            if cured.startswith(open_tag) and cured.endswith(close_tag):
-                cured = cured[len(open_tag) : -len(close_tag)].strip()
-                break
-        if cured.startswith("→ ") or cured.startswith("→"):
-            cured = cured.lstrip("→").lstrip()
+        # Uses regex instead of startswith/endswith so leading/trailing
+        # whitespace and newlines don't defeat the match — v3.4.6 used literal
+        # startswith which missed "<output>X</output>\n" and similar variants.
+        m = _FULL_WRAPPER_RE.match(cured)
+        if m:
+            cured = m.group(2).strip()
+        # Leftover "→ " prefix from the few-shot arrow style.
+        cured = _LEADING_ARROW_RE.sub("", cured, count=1)
 
         if cured != text:
             log.info("language_cure_applied", original_len=len(text), cured_len=len(cured))

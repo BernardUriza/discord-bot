@@ -61,9 +61,12 @@ _TRIVIAL_TOKENS = frozenset(
         "uff",
         "ufff",
         "eso",
-        "bien",
         "buena",
         "bueno",
+        # NOTE: "bien" intentionally NOT here — it's in _SHORT_NON_TRIVIAL because
+        # a solo "bien" (especially as "¿bien?") is often a check-in that deserves
+        # a response. The trivial-token check runs BEFORE the allowlist, so
+        # having "bien" here would make the allowlist useless for it.
         "gracias",
         "thx",
         "ty",
@@ -87,6 +90,11 @@ _TRIVIAL_TOKENS = frozenset(
         "🔥",
         "🙏",
     }
+)
+
+# Invariant: these two sets must be disjoint, or the allowlist is dead code.
+assert not (_TRIVIAL_TOKENS & _SHORT_NON_TRIVIAL), (
+    f"Tokens in both TRIVIAL and SHORT_NON_TRIVIAL lists — allowlist can't win: {_TRIVIAL_TOKENS & _SHORT_NON_TRIVIAL}"
 )
 
 _WHITESPACE = re.compile(r"\s+")

@@ -74,6 +74,30 @@ class TestLanguageCure:
         assert not result.startswith("→")
 
     @pytest.mark.asyncio
+    async def test_strips_wrapper_with_trailing_newline(self, mock_client):
+        # Regression v3.4.7: v3.4.6 used startswith/endswith, which failed if
+        # Haiku added a trailing \n. The scratchpad leak would come back.
+        mock_client.messages.create = AsyncMock(return_value=_mock_response("<output>Texto curado</output>\n"))
+        result = await language_cure(mock_client, "haiku", "Cured text in English")
+        assert result == "Texto curado"
+        assert "<" not in result
+
+    @pytest.mark.asyncio
+    async def test_strips_wrapper_with_leading_whitespace(self, mock_client):
+        mock_client.messages.create = AsyncMock(return_value=_mock_response("  <output>Texto</output>"))
+        result = await language_cure(mock_client, "haiku", "Text in English here")
+        assert result == "Texto"
+
+    @pytest.mark.asyncio
+    async def test_strips_multiline_wrapped_content(self, mock_client):
+        # Multiline payload inside wrapper — common for longer responses.
+        mock_client.messages.create = AsyncMock(
+            return_value=_mock_response("<output>Línea uno.\n\nLínea dos.</output>")
+        )
+        result = await language_cure(mock_client, "haiku", "Line one.\n\nLine two here.")
+        assert result == "Línea uno.\n\nLínea dos."
+
+    @pytest.mark.asyncio
     async def test_returns_original_on_error(self, mock_client):
         mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
         original = "This should come back unchanged"

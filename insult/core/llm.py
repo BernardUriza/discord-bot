@@ -169,8 +169,15 @@ class LLMClient:
         tool_choice: dict | None = None,
     ) -> LLMResponse:
         """Raw API call with retry logic for transient errors."""
+        if self.max_retries < 1:
+            raise ValueError(f"max_retries must be >= 1, got {self.max_retries}")
+
         last_error: Exception | None = None
         attempt = 0
+        # kwargs is initialized per-iteration inside the loop, but we bind it
+        # here so the BadRequestError fallback (`kwargs.pop("tools")`) can never
+        # reference an unbound name even under exotic control flow.
+        kwargs: dict = {}
 
         for attempt in range(1, self.max_retries + 1):
             try:
@@ -250,6 +257,12 @@ class LLMClient:
             last_error_type=type(last_error).__name__ if last_error else None,
             last_error=str(last_error),
         )
+        if last_error is None:
+            # Unreachable with max_retries >= 1 (loop runs at least once, and
+            # every path either returns, raises, or assigns last_error). Keep
+            # the explicit RuntimeError instead of `raise None` so if the
+            # invariant breaks in the future the failure mode is debuggable.
+            raise RuntimeError("llm._send exited loop without last_error set")
         raise last_error
 
     async def chat(

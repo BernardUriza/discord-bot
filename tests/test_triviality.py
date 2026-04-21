@@ -92,3 +92,19 @@ class TestIsTrivialFalse:
             assert not is_trivial(word), f"attention-caller {word!r} should not be trivial"
             assert not is_trivial(word.upper()), f"uppercase {word.upper()!r} should not be trivial"
             assert not is_trivial(f"{word}?"), f"{word!r} with ? should not be trivial"
+
+    def test_bien_sale_vale_are_not_trivial(self):
+        # Regression v3.4.7: 'bien', 'sale', 'vale' were ALSO in TRIVIAL_TOKENS,
+        # so the whitelist never won — they got marked trivial anyway. The
+        # assertion in triviality.py now guards the invariant.
+        for word in ["bien", "sale", "vale"]:
+            assert not is_trivial(word), f"{word!r} should hit whitelist, not trivial list"
+            assert not is_trivial(word.upper()), f"uppercase {word!r} should not be trivial"
+            assert not is_trivial(f"{word}?"), f"{word!r}? should not be trivial"
+
+    def test_whitelist_and_trivial_sets_are_disjoint(self):
+        # The assertion fires at module import if violated. This test ensures
+        # the invariant is covered even if someone removes the `assert` one day.
+        from insult.core.triviality import _SHORT_NON_TRIVIAL, _TRIVIAL_TOKENS
+
+        assert not (_TRIVIAL_TOKENS & _SHORT_NON_TRIVIAL)
