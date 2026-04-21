@@ -302,6 +302,10 @@ class LLMClient:
             from insult.core.language import language_cure
 
             response.text = await language_cure(self.client, self.cure_model, response.text)
+            # Defense in depth: the cure model (Haiku) sometimes re-introduces
+            # scratchpad XML or stray tags even when the root prompt avoids them.
+            # Re-run strip_metadata so nothing reaches the user.
+            response.text = strip_metadata(response.text)
 
         # Step 7d: Formatting normalization — deterministic enforcement of
         # exclamation limits (max 1) and bold limits (max 2). Runs LAST so

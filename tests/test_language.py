@@ -51,6 +51,29 @@ class TestLanguageCure:
         assert result == "Texto curado aquí"
 
     @pytest.mark.asyncio
+    async def test_strips_response_wrapper(self, mock_client):
+        # Regression v3.4.6: Haiku sometimes used <response> instead of <output>.
+        mock_client.messages.create = AsyncMock(return_value=_mock_response("<response>Texto limpio</response>"))
+        result = await language_cure(mock_client, "haiku", "Clean text in English")
+        assert result == "Texto limpio"
+
+    @pytest.mark.asyncio
+    async def test_strips_input_wrapper(self, mock_client):
+        # If Haiku echoes the input wrapper by mistake.
+        mock_client.messages.create = AsyncMock(return_value=_mock_response("<input>Texto copiado</input>"))
+        result = await language_cure(mock_client, "haiku", "Copied text in English")
+        assert result == "Texto copiado"
+
+    @pytest.mark.asyncio
+    async def test_strips_leading_arrow_from_fewshot(self, mock_client):
+        # The new prompt uses "→" to separate input/output in examples; Haiku
+        # occasionally copies it as a prefix. Must be stripped.
+        mock_client.messages.create = AsyncMock(return_value=_mock_response("→ Texto con flecha"))
+        result = await language_cure(mock_client, "haiku", "Text with arrow in English")
+        assert result == "Texto con flecha"
+        assert not result.startswith("→")
+
+    @pytest.mark.asyncio
     async def test_returns_original_on_error(self, mock_client):
         mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
         original = "This should come back unchanged"
@@ -84,11 +107,15 @@ class TestLanguageCure:
         assert result == ""
 
     @pytest.mark.asyncio
-    async def test_wraps_input_in_xml_tags(self, mock_client):
-        mock_client.messages.create = AsyncMock(return_value=_mock_response("texto"))
-        await language_cure(mock_client, "haiku", "some text here right now")
-        # Verify the input was wrapped in <input> tags
+    async def test_sends_raw_text_without_xml_wrapper(self, mock_client):
+        # Regression v3.4.6: user content must NOT be wrapped in <input> tags.
+        # Doing so combined with XML few-shot taught Haiku to answer wrapped
+        # in <output>...</output> and the tags sometimes leaked to users.
+        mock_client.messages.create = AsyncMock(return_value=_mock_response("texto largo de prueba"))
+        input_text = "some text here right now"
+        await language_cure(mock_client, "haiku", input_text)
         call_args = mock_client.messages.create.call_args
         user_msg = call_args.kwargs["messages"][0]["content"]
-        assert user_msg.startswith("<input>")
-        assert user_msg.endswith("</input>")
+        assert user_msg == input_text
+        assert "<input>" not in user_msg
+        assert "</input>" not in user_msg
