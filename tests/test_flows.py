@@ -486,6 +486,57 @@ class TestBuildFlowPrompt:
         assert "Deflection" in prompt
         assert "Nice redirect" in prompt
 
+    # ── Depth Pattern (v3.4.11): inject observation+question rule on weight ──
+
+    def test_depth_pattern_injected_on_sincere(self):
+        # Real trigger: "Cortar de tajo. Por eso eliminé a ese amigo."
+        analysis = self._make_analysis(
+            pressure=PressureAnalysis(UserState.SINCERE, 0.8, 2, "sincere content", False),
+        )
+        prompt = build_flow_prompt(analysis)
+        assert "Depth Pattern" in prompt
+        assert "OBSERVATION" in prompt
+        assert "QUESTION" in prompt
+
+    def test_depth_pattern_injected_on_vulnerable(self):
+        analysis = self._make_analysis(
+            pressure=PressureAnalysis(UserState.VULNERABLE, 0.9, 1, "vulnerable", False),
+        )
+        prompt = build_flow_prompt(analysis)
+        assert "Depth Pattern" in prompt
+
+    def test_depth_pattern_injected_on_high_pressure(self):
+        # Even if not vulnerable/sincere, high pressure (ARC on bigotry etc.) triggers.
+        analysis = self._make_analysis(
+            pressure=PressureAnalysis(UserState.PREJUDICED, 0.7, 5, "arc", False),
+        )
+        prompt = build_flow_prompt(analysis)
+        assert "Depth Pattern" in prompt
+
+    def test_depth_pattern_not_on_neutral(self):
+        # "me llevo mi mac?" — no weight, no depth requirement, short reply still fine.
+        analysis = self._make_analysis(
+            pressure=PressureAnalysis(UserState.NEUTRAL, 0.5, 2, "neutral", False),
+        )
+        prompt = build_flow_prompt(analysis)
+        assert "Depth Pattern" not in prompt
+
+    def test_depth_pattern_not_on_playful(self):
+        # Laughing conversations don't need the 2-beat rule.
+        analysis = self._make_analysis(
+            pressure=PressureAnalysis(UserState.PLAYFUL, 0.8, 2, "playful", False),
+        )
+        prompt = build_flow_prompt(analysis)
+        assert "Depth Pattern" not in prompt
+
+    def test_depth_pattern_not_on_hostile(self):
+        # Hostile input gets pressure response, but bare validation isn't the risk.
+        analysis = self._make_analysis(
+            pressure=PressureAnalysis(UserState.HOSTILE, 0.8, 3, "hostile", False),
+        )
+        prompt = build_flow_prompt(analysis)
+        assert "Depth Pattern" not in prompt
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Post-Generation Validator

@@ -1058,6 +1058,23 @@ def analyze_flows(
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+_DEPTH_TRIGGER_STATES = {UserState.SINCERE, UserState.VULNERABLE}
+_DEPTH_PATTERN_GUIDANCE = (
+    "## Depth Pattern (MANDATORY when weight is present)\n"
+    "The user just shared a decision, realization, boundary, or wound. A bare "
+    'validation ("Bien hecho.", "Exacto.", "Así es.") leaves them unmet. '
+    "Your response — however short — MUST carry TWO beats:\n"
+    "  1. One specific OBSERVATION grounded in what they just said — name a "
+    "pattern, a tension, a hidden cost. Not echo, not warmth, not generic "
+    "affirmation.\n"
+    '  2. One pointed QUESTION that forces them forward. Not "how do you '
+    'feel?" — something like "¿fue tu ego o tu lealtad mal dirigida?" '
+    "that sharpens the edge they're already on.\n"
+    "Length is NOT the constraint — 2 sentences is enough. The constraint is "
+    "DEPTH + DRIVE: one thing seen, one thing asked. Dry is fine. Empty is not."
+)
+
+
 def build_flow_prompt(analysis: FlowAnalysis) -> str:
     """Convert FlowAnalysis to prompt guidance text for system prompt injection."""
     parts: list[str] = []
@@ -1071,6 +1088,13 @@ def build_flow_prompt(analysis: FlowAnalysis) -> str:
     pressure_text = _PRESSURE_GUIDANCE.get(analysis.pressure.pressure_level, "")
     if pressure_text:
         parts.append(pressure_text)
+
+    # Depth pattern — when the user brings weight, bare validation is unacceptable.
+    # Triggers on sincere/vulnerable user state OR high pressure (4-5). DEFAULT /
+    # PLAYFUL / HOSTILE etc. stay unaffected — a "Nel." to "me llevo mi mac?"
+    # remains perfect.
+    if analysis.pressure.detected_state in _DEPTH_TRIGGER_STATES or analysis.pressure.pressure_level >= 4:
+        parts.append(_DEPTH_PATTERN_GUIDANCE)
 
     # Expression (always inject — with enforcement framing)
     parts.append(
