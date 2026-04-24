@@ -112,15 +112,24 @@ class VoiceCog(commands.Cog):
             log.debug("tts_skipped", reason="self_reaction", message_id=payload.message_id)
             return
 
-        guild = self.bot.get_guild(payload.guild_id)
-        if not guild:
-            log.warning("tts_skipped", reason="guild_not_cached", guild_id=payload.guild_id)
-            return
-
-        channel = guild.get_channel(payload.channel_id)
-        if not channel:
-            log.warning("tts_skipped", reason="channel_not_cached", channel_id=payload.channel_id)
-            return
+        # Resolve channel directly via the bot cache. Works for guild text
+        # channels AND DMs (which have payload.guild_id=None). The old code
+        # took a guild-first path — get_guild(None) returned None and the
+        # handler silent-dropped every DM reaction. Reported 2026-04-24 by
+        # bernard2389: TTS stopped responding because he moved from #general
+        # to DM, and nothing ever reached the handler past the guild guard.
+        channel = self.bot.get_channel(payload.channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(payload.channel_id)
+            except (discord.NotFound, discord.Forbidden):
+                log.warning(
+                    "tts_skipped",
+                    reason="channel_not_found",
+                    channel_id=payload.channel_id,
+                    guild_id=payload.guild_id,
+                )
+                return
 
         try:
             message = await channel.fetch_message(payload.message_id)
@@ -181,4 +190,6 @@ class VoiceCog(commands.Cog):
         # Send as audio file attachment
         audio_file = discord.File(io.BytesIO(audio_bytes), filename="insult.mp3")
         await channel.send(file=audio_file)
-        log.info("tts_sent", text_len=len(text), channel=channel.name)
+        # DMChannel has no `.name`; fall back to a safe descriptor.
+        channel_label = getattr(channel, "name", None) or f"dm:{channel.id}"
+        log.info("tts_sent", text_len=len(text), channel=channel_label)
