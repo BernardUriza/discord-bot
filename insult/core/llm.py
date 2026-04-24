@@ -1,6 +1,7 @@
 """Claude API client with character break detection and tool_use support."""
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
@@ -296,15 +297,10 @@ class LLMClient:
                 response = await self.client.messages.create(**kwargs)
                 cache_read = getattr(response.usage, "cache_read_input_tokens", 0) or 0
                 cache_create = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
-                log.info(
-                    "llm_response",
-                    model=effective_model,
-                    input_tokens=response.usage.input_tokens,
-                    output_tokens=response.usage.output_tokens,
-                    cache_read=cache_read,
-                    cache_create=cache_create,
-                    stop_reason=response.stop_reason,
-                )
+                block_types: dict[str, int] = {}
+                for block in response.content:
+                    bt = getattr(block, "type", "unknown")
+                    block_types[bt] = block_types.get(bt, 0) + 1
                 record_usage(
                     response.usage.input_tokens,
                     response.usage.output_tokens,
@@ -314,6 +310,19 @@ class LLMClient:
                 )
                 parsed = _parse_response_content(response.content)
                 parsed.model_used = effective_model
+                log.info(
+                    "llm_response",
+                    model=effective_model,
+                    attempt=attempt,
+                    input_tokens=response.usage.input_tokens,
+                    output_tokens=response.usage.output_tokens,
+                    cache_read=cache_read,
+                    cache_create=cache_create,
+                    stop_reason=response.stop_reason,
+                    block_types=block_types,
+                    text_len=len(parsed.text),
+                    tool_calls=len(parsed.tool_calls),
+                )
                 return parsed
 
             except anthropic.RateLimitError as e:
@@ -428,7 +437,9 @@ class LLMClient:
                 primary_for_reinforcement = fallback
                 original_for_sanitize = fb
             except Exception:
-                log.warning("model_fallback_rerun_failed", from_model=primary, to_model=fallback)
+                log.exception(
+                    "model_fallback_rerun_failed", reason="break_fallback", from_model=primary, to_model=fallback
+                )
                 primary_for_reinforcement = primary
                 original_for_sanitize = original
         else:
@@ -491,6 +502,7 @@ class LLMClient:
         primary = model or self.model
         fallback = fallback_model or primary
         has_distinct_fallback = fallback != primary
+        chat_start = time.monotonic()
 
         response = await self._send(
             system_prompt,
@@ -501,12 +513,28 @@ class LLMClient:
             on_timeout=on_timeout,
         )
 
+        raw_text_len = len(response.text)
+
         # Strip leaked metadata (timestamps, speaker labels) before any other processing
+        before_strip = response.text
         response.text = strip_metadata(response.text)
+        if before_strip != response.text:
+            log.info(
+                "llm_text_mutated",
+                stage="strip_metadata",
+                before_len=len(before_strip),
+                after_len=len(response.text),
+            )
 
         breaks = detect_break(response.text)
         if breaks:
-            log.warning("character_break_detected", model=primary, patterns=breaks)
+            log.warning(
+                "character_break_detected",
+                model=primary,
+                patterns=breaks,
+                text_preview=response.text[:200],
+                text_len=len(response.text),
+            )
             retry_response = await self._recover_from_break(
                 response,
                 system_prompt,
@@ -518,15 +546,30 @@ class LLMClient:
                 has_distinct_fallback,
                 on_timeout=on_timeout,
             )
-            if retry_response is not None:
-                return retry_response
-            # _recover_from_break already sanitized the original response in-place on total failure
-            return response
+            final = retry_response if retry_response is not None else response
+            log.info(
+                "llm_chat_complete",
+                model=primary,
+                fallback=fallback if has_distinct_fallback else None,
+                chat_ms=int((time.monotonic() - chat_start) * 1000),
+                raw_text_len=raw_text_len,
+                final_text_len=len(final.text),
+                tool_calls=len(final.tool_calls),
+                model_used=final.model_used,
+                exit_reason="character_break_recovered" if retry_response is not None else "character_break_sanitized",
+            )
+            return final
 
         # Log anti-pattern drift — soft escalate to the fallback tier when distinct.
         anti_patterns = detect_anti_patterns(response.text)
         if anti_patterns:
-            log.warning("anti_pattern_detected", model=primary, patterns=anti_patterns)
+            log.warning(
+                "anti_pattern_detected",
+                model=primary,
+                patterns=anti_patterns,
+                text_preview=response.text[:200],
+                text_len=len(response.text),
+            )
             if has_distinct_fallback and len(anti_patterns) >= _ANTI_PATTERN_FALLBACK_THRESHOLD:
                 log.info(
                     "model_fallback_triggered",
@@ -561,26 +604,75 @@ class LLMClient:
                     else:
                         response = rerun
                 except Exception:
-                    log.warning("model_fallback_rerun_failed", from_model=primary, to_model=fallback)
+                    log.exception(
+                        "model_fallback_rerun_failed",
+                        reason="anti_pattern_fallback",
+                        from_model=primary,
+                        to_model=fallback,
+                    )
 
         # Step 7c: Language Cure — normalize mixed-language output via Haiku
         if self.cure_model and response.text:
             from insult.core.language import language_cure
 
+            before_cure = response.text
             response.text = await language_cure(self.client, self.cure_model, response.text)
+            if before_cure != response.text:
+                log.info(
+                    "llm_text_mutated",
+                    stage="language_cure",
+                    before_len=len(before_cure),
+                    after_len=len(response.text),
+                )
             # Defense in depth: the cure model (Haiku) sometimes re-introduces
             # scratchpad XML or stray tags even when the root prompt avoids them.
             # Re-run strip_metadata so nothing reaches the user.
+            before_strip2 = response.text
             response.text = strip_metadata(response.text)
+            if before_strip2 != response.text:
+                log.info(
+                    "llm_text_mutated",
+                    stage="strip_metadata_post_cure",
+                    before_len=len(before_strip2),
+                    after_len=len(response.text),
+                )
 
         # Step 7d: Formatting normalization — deterministic enforcement of
         # exclamation limits (max 1) and bold limits (max 2). Runs LAST so
         # neither the LLM nor the language cure can reintroduce violations.
         if response.text:
+            before_fmt = response.text
             response.text = normalize_formatting(response.text)
+            if before_fmt != response.text:
+                log.info(
+                    "llm_text_mutated",
+                    stage="normalize_formatting",
+                    before_len=len(before_fmt),
+                    after_len=len(response.text),
+                )
+            before_lists = response.text
             response.text = strip_lists(response.text)
+            if before_lists != response.text:
+                log.info(
+                    "llm_text_mutated",
+                    stage="strip_lists",
+                    before_len=len(before_lists),
+                    after_len=len(response.text),
+                )
 
         if response.tool_calls:
             log.info("tool_calls_detected", tools=[tc.name for tc in response.tool_calls])
 
+        log.info(
+            "llm_chat_complete",
+            model=primary,
+            fallback=fallback if has_distinct_fallback else None,
+            chat_ms=int((time.monotonic() - chat_start) * 1000),
+            raw_text_len=raw_text_len,
+            final_text_len=len(response.text),
+            text_preview=response.text[:160],
+            tool_calls=len(response.tool_calls),
+            model_used=response.model_used,
+            exit_reason="ok",
+        )
         return response

@@ -5,6 +5,7 @@ because modules do `log = structlog.get_logger()` at import time.
 """
 
 import asyncio
+import os
 
 import structlog
 
@@ -17,6 +18,10 @@ def _metrics_processor(logger, method_name, event_dict):
     return event_dict
 
 
+# Pick renderer based on LOG_FORMAT env var (json for KQL, console for local dev)
+_log_format = os.environ.get("LOG_FORMAT", "console").lower()
+_renderer = structlog.processors.JSONRenderer() if _log_format == "json" else structlog.dev.ConsoleRenderer()
+
 # Configure structlog FIRST — before any insult.* import
 structlog.configure(
     processors=[
@@ -26,7 +31,7 @@ structlog.configure(
         structlog.dev.set_exc_info,
         structlog.processors.TimeStamper(fmt="iso"),
         _metrics_processor,
-        structlog.dev.ConsoleRenderer(),
+        _renderer,
     ],
     wrapper_class=structlog.make_filtering_bound_logger(0),
     context_class=dict,
