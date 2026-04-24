@@ -130,9 +130,12 @@ class TestChatCog:
         assert "medlineplus.gov" in web_search_tools[0]["allowed_domains"]
         assert "cima.aemps.es" in web_search_tools[0]["allowed_domains"]
 
-    @patch("insult.cogs.chat.send_response", new_callable=AsyncMock)
+    @patch("insult.cogs.chat.tools.send_response", new_callable=AsyncMock)
     async def test_inaugurate_channel_generates_message(self, mock_send, cog):
-        """_inaugurate_channel should call LLM and send response to channel."""
+        """inaugurate_channel (now a free function in tools.py) should call
+        the LLM and send the response to the channel."""
+        from insult.cogs.chat.tools import inaugurate_channel
+
         cog.llm.chat = AsyncMock(return_value=LLMResponse(text="Bienvenidos a este canal."))
         mock_channel = MagicMock()
         mock_channel.name = "filosofia"
@@ -141,7 +144,14 @@ class TestChatCog:
         mock_creator.display_name = "Bernard"
         cog.memory.get_facts = AsyncMock(return_value=[])
 
-        await cog._inaugurate_channel(mock_channel, "filosofia", mock_creator)
+        await inaugurate_channel(
+            mock_channel,
+            "filosofia",
+            mock_creator,
+            memory=cog.memory,
+            llm=cog.llm,
+            settings=cog.settings,
+        )
 
         cog.llm.chat.assert_called_once()
         mock_send.assert_called_once()

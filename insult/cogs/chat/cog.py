@@ -1,0 +1,125 @@
+"""ChatCog — Discord listener + !chat command.
+
+Thin orchestration layer: the listener delegates to `BatchManager` for
+dedup/cooldown/batching, and `_respond` binds structlog contextvars +
+emits the terminal `chat_turn_end` log around `turn.run_turn`. All turn
+pipeline work lives in sibling modules under `insult.cogs.chat.*`.
+
+State ownership:
+  - `BatchManager` owns batch buffers, dedup set, and cooldown timestamps
+  - `_background_tasks` set is handed to `spawn_tracked_task` so every
+    fire-and-forget task gets automatic cleanup + terminal log
+  - `_expression_history` and `_opus_budget` live here because they are
+    mutated across turns and shared between them
+"""
+
+from __future__ import annotations
+
+import asyncio
+import secrets
+import time
+from typing import TYPE_CHECKING
+
+import discord
+import structlog
+from discord.ext import commands
+
+from insult.cogs.chat.batch import BatchManager
+from insult.cogs.chat.tasks import spawn_tracked_task
+from insult.cogs.chat.tools import ALL_TOOLS
+from insult.cogs.chat.turn import run_turn
+from insult.cogs.chat.voice import transcribe_voice
+from insult.core.flows import ExpressionHistory
+from insult.core.routing import OpusBudget
+
+if TYPE_CHECKING:
+    from insult.app import Container
+
+log = structlog.get_logger()
+
+
+class ChatCog(commands.Cog):
+    def __init__(self, container: Container):
+        self.memory = container.memory
+        self.llm = container.llm
+        self.settings = container.settings
+        self.bot = container.bot
+        self._background_tasks: set[asyncio.Task] = set()
+        self._expression_history = ExpressionHistory()
+        self._batches = BatchManager()
+        self._opus_budget = OpusBudget(cap=getattr(self.settings, "opus_24h_cap", 20))
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        """Respond to every message — no !chat prefix needed.
+
+        The BatchManager accumulates rapid-fire messages from the same
+        user and fires `flush_callback` (our `_respond`) with the combined
+        text after BATCH_WAIT_SECONDS of silence, like a human waiting for
+        someone to finish typing.
+        """
+        await self._batches.handle_incoming(
+            message,
+            settings=self.settings,
+            memory=self.memory,
+            bot=self.bot,
+            flush_callback=self._respond,
+            transcribe_voice=transcribe_voice,
+        )
+
+    @commands.command(name="chat")
+    @commands.cooldown(1, 10, commands.BucketType.user)
+    async def chat(self, ctx: commands.Context, *, message: str) -> None:
+        """Fallback: !chat still works for explicit invocation."""
+        await self._respond(ctx.message, message)
+
+    def _spawn_task(self, coro, *, name: str | None = None) -> None:
+        """Create a tracked background task (auto-cleanup + terminal log)."""
+        spawn_tracked_task(coro, self._background_tasks, name=name)
+
+    async def _respond(self, message: discord.Message, text: str) -> None:
+        """Bind request_id/channel_id/user_id to structlog contextvars and
+        run one turn, emitting a terminal `chat_turn_end` with outcome.
+
+        Every log in this task inherits the bound vars — including llm.py,
+        delivery.py, and any background tasks spawned inside `run_turn`.
+        `grep request_id=<id>` then reconstructs the whole turn.
+        """
+        request_id = secrets.token_hex(4)
+        channel_id = str(message.channel.id)
+        user_id = str(message.author.id)
+        turn_start = time.monotonic()
+
+        self._batches.record_response(message.author.id)
+
+        structlog.contextvars.bind_contextvars(
+            request_id=request_id,
+            channel_id=channel_id,
+            user_id=user_id,
+        )
+        outcome = "unknown"
+        try:
+            outcome = await run_turn(
+                message,
+                text,
+                turn_start=turn_start,
+                memory=self.memory,
+                llm=self.llm,
+                settings=self.settings,
+                bot=self.bot,
+                expression_history=self._expression_history,
+                opus_budget=self._opus_budget,
+                spawn_task=self._spawn_task,
+                all_tools=ALL_TOOLS,
+            )
+        except BaseException as e:
+            outcome = f"unhandled:{type(e).__name__}"
+            log.exception("chat_turn_unhandled_exception", error_type=type(e).__name__)
+            raise
+        finally:
+            log.info(
+                "chat_turn_end",
+                outcome=outcome,
+                total_ms=int((time.monotonic() - turn_start) * 1000),
+            )
+            structlog.contextvars.unbind_contextvars("request_id", "channel_id", "user_id")
