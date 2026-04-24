@@ -238,19 +238,32 @@ class TestUpsertFactVectors:
 
 
 class TestSearchFactsSemantic:
-    """Test that MemoryStore.search_facts_semantic falls back gracefully."""
+    """Test that FactsRepository.search_facts_semantic falls back gracefully.
+
+    Post v3.5.5 the semantic-search fallback lives in FactsRepository; the
+    MemoryStore facade delegates to it. This test exercises the repository
+    directly because that's where the decision ("no vectors → plain get_facts")
+    lives now."""
 
     async def test_fallback_when_vectors_unavailable(self):
         """When vectors are not available, should fall back to get_facts."""
+        from insult.core.memory.repositories.facts import FactsRepository
 
-        memory = MagicMock()
-        memory._vectors_available = False
-        memory.get_facts = AsyncMock(return_value=[{"id": 1, "fact": "test", "category": "general", "updated_at": 0}])
+        # Fake a ConnectionManager whose `vectors_available` is False. The
+        # BaseRepository reads `self._manager.vectors_available` via its
+        # `vectors_available` property; short-circuiting there is the whole
+        # point of the fallback.
+        manager = MagicMock()
+        manager.vectors_available = False
 
-        # Import the actual method and call it on our mock
-        from insult.core.memory import MemoryStore
+        repo = FactsRepository(manager)
+        # Replace get_facts with a fast stub so we don't hit the DB at all.
+        repo.get_facts = AsyncMock(  # type: ignore[method-assign]
+            return_value=[{"id": 1, "fact": "test", "category": "general", "updated_at": 0}]
+        )
 
-        # Bind the real method to our mock
-        result = await MemoryStore.search_facts_semantic(memory, "user123", "test query")
+        result = await repo.search_facts_semantic("user123", "test query")
         assert len(result) == 1
         assert result[0]["fact"] == "test"
+        # Crucial: get_facts was awaited because the vector path was skipped.
+        repo.get_facts.assert_awaited_once_with("user123")
