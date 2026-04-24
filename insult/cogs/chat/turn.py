@@ -87,8 +87,13 @@ async def run_turn(
         return int((time.monotonic() - turn_start) * 1000)
 
     # --- Attachments ---
+    # Skip for voice messages: the .ogg was already transcribed by Whisper
+    # in batch.py and is now in `text`. If we also run process_attachments
+    # on that same .ogg, the unsupported-file branch surfaces
+    # "No puedo leer archivos .ogg..." as a ghost message in the channel
+    # alongside the real response. Reported 2026-04-24 by bernard2389.
     attachment_blocks: list = []
-    if message.attachments:
+    if message.attachments and not message.flags.voice:
         blocks, errors = await process_attachments(message.attachments)
         attachment_blocks = blocks
         for err in errors:
