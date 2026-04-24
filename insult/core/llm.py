@@ -1,6 +1,7 @@
 """Claude API client with character break detection and tool_use support."""
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 import anthropic
@@ -32,6 +33,10 @@ _PRICING: dict[str, dict[str, float]] = {
     "opus": {"input": 15.00, "output": 75.00, "cache_read": 1.50, "cache_create": 18.75},
 }
 _DEFAULT_FAMILY = "sonnet"
+
+# Timeouts are capped separately from other retries. Each timeout is ~30s of
+# dead air, so five would leave the user staring at nothing for 2+ minutes.
+_MAX_TIMEOUT_RETRIES = 2
 
 
 def _resolve_family(model: str) -> str:
@@ -205,7 +210,10 @@ class LLMClient:
         max_retries: int = 5,
         cure_model: str = "",
     ):
-        self.client = anthropic.AsyncAnthropic(api_key=api_key, timeout=timeout)
+        # max_retries=0 so the SDK does NOT retry internally — our outer loop
+        # owns retry policy. Without this, SDK retries ~2x under the hood turn
+        # our configured 30s timeout into ~90s per observed attempt.
+        self.client = anthropic.AsyncAnthropic(api_key=api_key, timeout=timeout, max_retries=0)
         self.model = model
         self.max_tokens = max_tokens
         self.max_retries = max_retries
@@ -219,11 +227,16 @@ class LLMClient:
         tools: list[dict] | None = None,
         tool_choice: dict | None = None,
         model: str | None = None,
+        on_timeout: Callable[[], Awaitable[None]] | None = None,
     ) -> LLMResponse:
         """Raw API call with retry logic for transient errors.
 
         `model` overrides self.model for this call only (used by the 3-tier
         router to route per-turn). Defaults to self.model when None.
+
+        `on_timeout` is awaited once after the FIRST timeout so callers can
+        notify the user that we're retrying (keeps the UX honest instead of
+        silent dead air).
         """
         if self.max_retries < 1:
             raise ValueError(f"max_retries must be >= 1, got {self.max_retries}")
@@ -232,6 +245,7 @@ class LLMClient:
 
         last_error: Exception | None = None
         attempt = 0
+        timeout_count = 0
         # kwargs is initialized per-iteration inside the loop, but we bind it
         # here so the BadRequestError fallback (`kwargs.pop("tools")`) can never
         # reference an unbound name even under exotic control flow.
@@ -297,8 +311,17 @@ class LLMClient:
 
             except (anthropic.APITimeoutError, anthropic.APIConnectionError) as e:
                 last_error = e
-                log.warning("llm_timeout", attempt=attempt, error=str(e))
-                if attempt == self.max_retries:
+                timeout_count += 1
+                log.warning("llm_timeout", attempt=attempt, timeout_count=timeout_count, error=str(e))
+                # Fire callback once, after the first timeout, so the user
+                # knows we are retrying rather than dead.
+                if timeout_count == 1 and on_timeout is not None:
+                    try:
+                        await on_timeout()
+                    except Exception:
+                        log.exception("on_timeout_callback_failed")
+                if timeout_count >= _MAX_TIMEOUT_RETRIES or attempt == self.max_retries:
+                    log.warning("llm_timeout_giving_up", timeout_count=timeout_count)
                     break
                 await asyncio.sleep(1)
 
@@ -341,6 +364,7 @@ class LLMClient:
         primary: str,
         fallback: str,
         has_distinct_fallback: bool,
+        on_timeout: Callable[[], Awaitable[None]] | None = None,
     ) -> LLMResponse | None:
         """Handle a character break on the primary response.
 
@@ -359,7 +383,14 @@ class LLMClient:
                 to_model=fallback,
             )
             try:
-                fb = await self._send(system_prompt, messages, tools=tools, tool_choice=tool_choice, model=fallback)
+                fb = await self._send(
+                    system_prompt,
+                    messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    model=fallback,
+                    on_timeout=on_timeout,
+                )
                 fb.text = strip_metadata(fb.text)
                 if not detect_break(fb.text):
                     log.info("character_break_fixed_on_fallback", from_model=primary, to_model=fallback)
@@ -384,6 +415,7 @@ class LLMClient:
                 tools=tools,
                 tool_choice=tool_choice,
                 model=primary_for_reinforcement,
+                on_timeout=on_timeout,
             )
             retry_response.text = strip_metadata(retry_response.text)
             retry_breaks = detect_break(retry_response.text)
@@ -413,6 +445,7 @@ class LLMClient:
         tool_choice: dict | None = None,
         model: str | None = None,
         fallback_model: str | None = None,
+        on_timeout: Callable[[], Awaitable[None]] | None = None,
     ) -> LLMResponse:
         """Send messages with optional tools, detect character breaks, retry if needed.
 
@@ -422,6 +455,8 @@ class LLMClient:
                 produces a character break or >=2 anti-pattern hits. When None
                 or equal to `model`, falls back to the legacy reinforced-retry
                 path against the same model (original behavior).
+            on_timeout: Awaited once after the first APITimeoutError so callers
+                can post a user-facing retry notice instead of silent dead air.
 
         Returns LLMResponse with text (for Discord) and tool_calls (for actions).
         """
@@ -429,7 +464,14 @@ class LLMClient:
         fallback = fallback_model or primary
         has_distinct_fallback = fallback != primary
 
-        response = await self._send(system_prompt, messages, tools=tools, tool_choice=tool_choice, model=primary)
+        response = await self._send(
+            system_prompt,
+            messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            model=primary,
+            on_timeout=on_timeout,
+        )
 
         # Strip leaked metadata (timestamps, speaker labels) before any other processing
         response.text = strip_metadata(response.text)
@@ -438,7 +480,15 @@ class LLMClient:
         if breaks:
             log.warning("character_break_detected", model=primary, patterns=breaks)
             retry_response = await self._recover_from_break(
-                response, system_prompt, messages, tools, tool_choice, primary, fallback, has_distinct_fallback
+                response,
+                system_prompt,
+                messages,
+                tools,
+                tool_choice,
+                primary,
+                fallback,
+                has_distinct_fallback,
+                on_timeout=on_timeout,
             )
             if retry_response is not None:
                 return retry_response

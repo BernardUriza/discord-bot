@@ -31,6 +31,7 @@ from insult.core.errors import classify_error, get_error_response
 from insult.core.facts import build_facts_prompt, extract_facts
 from insult.core.flows import ExpressionHistory, analyze_flows, build_flow_prompt, validate_flow_adherence
 from insult.core.guild_setup import post_facts_to_channel, post_reminder_set
+from insult.core.image_summary import summarize_images
 from insult.core.llm import WEB_SEARCH_TOOL
 from insult.core.presets import PresetMode, PresetModifier
 from insult.core.reactions import add_reactions, parse_reactions, strip_reactions
@@ -195,6 +196,23 @@ class ChatCog(commands.Cog):
             for err in errors:
                 await message.channel.send(err)
 
+        # Generate a short text description of any image attachments so future
+        # turns can reference them from SQLite context (which is text only).
+        # The main LLM call still sees the raw image blocks below.
+        text_for_memory = text
+        image_blocks = [b for b in attachment_blocks if isinstance(b, dict) and b.get("type") == "image"]
+        if image_blocks:
+            try:
+                summary = await summarize_images(
+                    image_blocks,
+                    client=self.llm.client,
+                    model=self.settings.summary_model,
+                )
+                if summary:
+                    text_for_memory = f"{text}\n[Imagen: {summary}]" if text else f"[Imagen: {summary}]"
+            except Exception:
+                log.exception("image_summary_wrapper_failed", channel_id=channel_id)
+
         guild_id = str(message.guild.id) if message.guild else None
         channel_name = message.channel.name if hasattr(message.channel, "name") else None
 
@@ -204,7 +222,7 @@ class ChatCog(commands.Cog):
                 user_id,
                 user_name,
                 "user",
-                text,
+                text_for_memory,
                 guild_id=guild_id,
                 channel_name=channel_name,
             )
@@ -374,9 +392,15 @@ class ChatCog(commands.Cog):
                 user_id=user_id,
             )
 
+        async def _notify_retry():
+            try:
+                await message.channel.send(get_error_response("retry_notice"))
+            except Exception:
+                log.exception("retry_notice_send_failed", channel_id=channel_id)
+
         try:
             async with message.channel.typing():
-                llm_kwargs = {"tools": tools, "tool_choice": tool_choice}
+                llm_kwargs = {"tools": tools, "tool_choice": tool_choice, "on_timeout": _notify_retry}
                 if model_choice is not None:
                     llm_kwargs["model"] = model_choice.primary
                     llm_kwargs["fallback_model"] = model_choice.fallback

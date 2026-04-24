@@ -17,10 +17,19 @@
 
 ## LLM Resilience
 - Timeout: 30s (configurable via LLM_TIMEOUT)
-- Max retries: 5 (configurable via LLM_MAX_RETRIES)
-- RateLimitError: exponential backoff (2^attempt seconds)
+- Max retries: 5 for most errors (configurable via LLM_MAX_RETRIES)
+- SDK-level retries disabled: `AsyncAnthropic(max_retries=0)` — our outer loop
+  owns retry policy. Without this, the SDK silently retries ~2x internally and
+  inflates observed timeouts from 30s to ~90s per attempt.
+- RateLimitError: exponential backoff (2^attempt seconds), up to LLM_MAX_RETRIES
 - AuthenticationError: fail immediately, no retry
-- Timeout/ConnectionError: retry with 1s delay
+- Timeout/ConnectionError: **capped at 2 attempts total** (`_MAX_TIMEOUT_RETRIES` in `llm.py`),
+  with 1s delay between them. Five timeouts × 30s = 2+ minutes of dead air is too
+  punishing; after 2 we give up and raise.
+- Timeout retry UX: callers may pass `on_timeout` to `LLMClient.chat()`. It fires
+  **once** after the first APITimeoutError so the user gets an in-character
+  "retry_notice" message instead of silent dead air. `chat.py._respond()` wires this.
+- APIStatusError 529 (Overloaded): exponential backoff, up to LLM_MAX_RETRIES
 - Other APIError: fail immediately
 - Character break detected: auto-retry with reinforced system prompt, then sanitize
 

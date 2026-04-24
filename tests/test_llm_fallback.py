@@ -169,3 +169,79 @@ async def test_anti_pattern_rerun_revalidates_break_on_fallback(client):
     # Exactly 3 calls: primary + anti-pattern fallback + reinforced-retry against fallback.
     assert len(calls) == 3
     assert [c["model"] for c in calls] == ["haiku", "sonnet", "sonnet"]
+
+
+# ---- Timeout handling: callback, short-circuit, category wiring ----
+#
+# These three tests cover behavior introduced alongside AsyncAnthropic(max_retries=0).
+# Without them a future refactor could silently re-extend timeout retries to 5
+# (2+ min of dead air) or drop the retry_notice category, and nobody would notice.
+
+
+def test_retry_notice_category_exists():
+    """retry_notice must be a real key in ERROR_RESPONSES. If someone deletes it,
+    get_error_response silently falls back to 'generic' and UX degrades without noise."""
+    from insult.core.errors import ERROR_RESPONSES, get_error_response
+
+    assert "retry_notice" in ERROR_RESPONSES
+    assert len(ERROR_RESPONSES["retry_notice"]) >= 1
+    # Calling it must return one of the registered entries — never the generic fallback.
+    for _ in range(10):
+        msg = get_error_response("retry_notice")
+        assert msg in ERROR_RESPONSES["retry_notice"]
+
+
+@pytest.mark.asyncio
+async def test_on_timeout_callback_fires_once_after_first_timeout():
+    """The callback must fire exactly once — after the first APITimeoutError — even
+    though a second timeout follows. Firing twice would spam the channel."""
+    import anthropic
+
+    with patch("insult.core.llm.anthropic.AsyncAnthropic"):
+        c = LLMClient(api_key="fake", model="sonnet", max_tokens=512, timeout=1.0, max_retries=5)
+
+    fake_request = object()  # anthropic.APITimeoutError only needs *a* request object
+    timeout_exc = anthropic.APITimeoutError(request=fake_request)  # type: ignore[arg-type]
+
+    c.client.messages.create = AsyncMock(side_effect=timeout_exc)
+
+    callback_fires = 0
+
+    async def on_timeout():
+        nonlocal callback_fires
+        callback_fires += 1
+
+    # Patch sleep so the 1s between timeout retries doesn't slow the suite.
+    with (
+        patch("insult.core.llm.asyncio.sleep", new=AsyncMock()),
+        pytest.raises(anthropic.APITimeoutError),
+    ):
+        await c._send("system", [{"role": "user", "content": "hi"}], on_timeout=on_timeout)
+
+    assert callback_fires == 1, f"callback must fire exactly once, got {callback_fires}"
+
+
+@pytest.mark.asyncio
+async def test_send_breaks_after_two_timeouts_without_reaching_max_retries():
+    """Timeout short-circuit: _send must give up after 2 timeouts even though
+    max_retries=5. Five timeouts of ~30s each would be 2+ min of dead air."""
+    import anthropic
+
+    with patch("insult.core.llm.anthropic.AsyncAnthropic"):
+        c = LLMClient(api_key="fake", model="sonnet", max_tokens=512, timeout=1.0, max_retries=5)
+
+    fake_request = object()
+    timeout_exc = anthropic.APITimeoutError(request=fake_request)  # type: ignore[arg-type]
+
+    c.client.messages.create = AsyncMock(side_effect=timeout_exc)
+
+    with (
+        patch("insult.core.llm.asyncio.sleep", new=AsyncMock()),
+        pytest.raises(anthropic.APITimeoutError),
+    ):
+        await c._send("system", [{"role": "user", "content": "hi"}])
+
+    # Exactly 2 attempts — not 5. If this fails, someone silently re-extended retries.
+    assert c.client.messages.create.await_count == 2, (
+        f"expected 2 attempts (short-circuited at _MAX_TIMEOUT_RETRIES), got {c.client.messages.create.await_count}"
+    )

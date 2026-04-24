@@ -30,6 +30,11 @@ ERROR_RESPONSES = {
         "Se me olvido todo lo que hablamos. Si, asi de memorable eres. Preguntame de nuevo.",
         "Mi memoria me fallo. No te emociones, no es que seas importante. Repite.",
     ],
+    "retry_notice": [
+        "Se me corto la linea, un segundo.",
+        "Dame chance, estoy reintentando.",
+        "Se me trabo tantito, ya voy.",
+    ],
 }
 
 
