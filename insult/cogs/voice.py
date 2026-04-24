@@ -93,27 +93,50 @@ class VoiceCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
-        """When someone reacts with 🔊, generate TTS and send as audio file."""
+        """When someone reacts with 🔊, generate TTS and send as audio file.
+
+        Every early-return path emits a `tts_skipped` log so silent drops
+        are debuggable. The prior version returned silently on six guards
+        (wrong emoji, self-reaction, missing guild/channel, missing message,
+        empty text) which made "ya no responde el TTS" regressions invisible.
+        """
         if str(payload.emoji) != SPEAK_EMOJI:
             return
+        log.info(
+            "tts_reaction_received",
+            user_id=payload.user_id,
+            channel_id=payload.channel_id,
+            message_id=payload.message_id,
+        )
         if payload.user_id == self.bot.user.id:
+            log.debug("tts_skipped", reason="self_reaction", message_id=payload.message_id)
             return
 
         guild = self.bot.get_guild(payload.guild_id)
         if not guild:
+            log.warning("tts_skipped", reason="guild_not_cached", guild_id=payload.guild_id)
             return
 
         channel = guild.get_channel(payload.channel_id)
         if not channel:
+            log.warning("tts_skipped", reason="channel_not_cached", channel_id=payload.channel_id)
             return
 
         try:
             message = await channel.fetch_message(payload.message_id)
         except discord.NotFound:
+            log.warning("tts_skipped", reason="message_not_found", message_id=payload.message_id)
             return
 
         text = message.content.strip()
         if not text:
+            log.info(
+                "tts_skipped",
+                reason="empty_content",
+                message_id=payload.message_id,
+                author_is_bot=message.author.bot,
+                attachments=len(message.attachments),
+            )
             return
 
         # Multi-chunk reassembly. delivery.py splits long responses into

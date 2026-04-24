@@ -1,3 +1,3 @@
 """Insult — Discord bot con memoria longitudinal + Claude API."""
 
-__version__ = "3.5.16"
+__version__ = "3.5.17"
