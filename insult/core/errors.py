@@ -35,6 +35,16 @@ ERROR_RESPONSES = {
         "Dame chance, estoy reintentando.",
         "Se me trabo tantito, ya voy.",
     ],
+    # "billing" fires when Anthropic returns a 400 BadRequestError with
+    # "credit balance is too low" in the message. The in-character response
+    # tells the OPERATOR (via Discord, in front of other users) that the
+    # API wallet is empty — so they don't have to curl logs to know why
+    # the bot went quiet. See classify_error() for the detection logic.
+    "billing": [
+        "Se me acabo el changarro. Dile a mi patron que me recargue.",
+        "Sin pisto no hay insultos, compa. Dile a Bernard que pague la luz.",
+        "Se acabaron las fichas. Recarga mi cuenta y vuelvo.",
+    ],
 }
 
 
@@ -45,8 +55,26 @@ def get_error_response(error_type: str) -> str:
 
 
 def classify_error(exc: Exception) -> str:
-    """Map exception type to error category."""
+    """Map an exception to the error category used by `get_error_response`.
+
+    Order matters: specific billing / status-code checks run BEFORE the
+    coarse name-based matchers because an Anthropic BadRequestError that
+    actually means "you're out of credits" must route to the billing
+    bucket (operator-visible), not to the generic "tuve un tropiezo"
+    that hides the real problem. See 2026-04-24 incident where a low
+    credit balance silently produced "generic" errors for an hour
+    because the classifier only matched on `type().__name__`.
+    """
     name = type(exc).__name__
+    msg = str(exc).lower()
+
+    # Billing: Anthropic returns a 400 with this specific phrase when the
+    # workspace runs out of prepaid credits. Detect by message content
+    # rather than exception subtype — the exception IS a BadRequestError
+    # but so are many unrelated 400s, so class matching alone is too broad.
+    if "credit balance" in msg or "credit_balance" in msg or "insufficient_quota" in msg:
+        return "billing"
+
     if "Timeout" in name:
         return "timeout"
     if "RateLimit" in name:
