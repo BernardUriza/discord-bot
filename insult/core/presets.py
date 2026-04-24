@@ -15,6 +15,12 @@ import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from insult.core.vulnerability import (
+    VULNERABLE_THRESHOLD,
+    compute_vulnerability_score,
+    matched_signal_groups,
+)
+
 # ---------------------------------------------------------------------------
 # Preset definitions
 # ---------------------------------------------------------------------------
@@ -60,14 +66,89 @@ _META_PATTERNS = [
     re.compile(r"(?i)\b(DAN|do anything now|act as|actua como)\b"),
 ]
 
-# RESPECTFUL_SERIOUS triggers — crisis, distress, heavy topics
+# RESPECTFUL_SERIOUS triggers — crisis, distress, heavy topics.
+#
+# This list MUST include the CLINICAL vocabulary users employ when describing
+# their own diagnoses or ongoing psychiatric/chronic care, not only lay-person
+# crisis phrases. Before this expansion users writing "Estrés Postraumático
+# Complejo", "me aumentó la dosis de quetiapina", or "no quisiera internarme"
+# matched NOTHING and fell through to DEFAULT_ABRASIVE — the bot would roast
+# people describing their own trauma. Real regression reported 2026-04-23
+# (see tests/test_presets_clinical.py for verbatim messages).
+#
+# Design note on \w* suffixes: prefixes like "psiqu[ií]atr" must match
+# inflected forms — "psiquiatra", "psiquiatría", "psiquiátrica". A trailing
+# \b after a prefix fails because the next char is still a word char. Using
+# \w* after the prefix lets the match extend to a real word boundary. For
+# compound words where the trigger sits INSIDE (e.g. "postraumático"), we
+# add a dedicated prefix alternative.
 _SERIOUS_PATTERNS = [
-    re.compile(r"(?i)\b(suicid|me quiero morir|i want to die|kill myself|matarme)\b"),
-    re.compile(r"(?i)\b(depres(ion|sed)|ansiedad|anxiety|panic attack|ataque de panico)\b"),
-    re.compile(r"(?i)\b(murio|fallecio|died|passed away|cancer|diagnosticaron)\b"),
-    re.compile(r"(?i)\b(ayuda en serio|help me for real|estoy mal de verdad|i'm really not ok)\b"),
-    re.compile(r"(?i)\b(abuso|abuse|violencia|violence|acoso|harassment)\b"),
-    re.compile(r"(?i)\b(me siento (muy )?solo|i feel (so )?alone|no tengo a nadie)\b"),
+    # Explicit suicide / self-harm
+    re.compile(r"(?i)\b(suicid\w*|me quiero morir|i want to die|kill myself|matarme|autolesion\w*|self[- ]harm)"),
+    # Lay-person mental-health terms
+    re.compile(
+        r"(?i)\b(depres(?:ion|sed|i[oó]n)\w*|ansiedad|anxiety|panic attack|ataque de p[aá]nico|burnout|crisis emocional)"
+    ),
+    # Clinical psychiatric vocabulary (trauma word + compound + acronyms + disorders)
+    # "trauma" as standalone OR inside "postraumatic" / "postraumático"
+    re.compile(
+        r"(?i)(?:"
+        r"\btrauma\w*"
+        r"|\bpostraum\w*"
+        r"|\bpost[- ]traum\w*"
+        r"|\bptsd\b"
+        r"|\bcptsd\b"
+        r"|\btept\b"
+        r"|\btdah\b"
+        r"|\badhd\b"
+        r"|\btoc\b"
+        r"|\bocd\b"
+        r"|\btrastorno\w*"
+        r"|\bdisociaci[oó]n\w*"
+        r"|\bdissociat\w*"
+        r"|\bbipolar\w*"
+        r"|\besquizo\w*"
+        r"|\bschizo\w*"
+        r"|\bpsicosis\b"
+        r"|\bpsychos\w*"
+        r"|\bestr[eé]s\s+post[- ]?traum\w*"
+        r"|\bestr[eé]s\s+cr[oó]nic\w*"
+        r")"
+    ),
+    # Psychiatric medications (generic stems + common brand names + dosage phrasing)
+    re.compile(
+        r"(?i)\b("
+        r"quetiapin\w*|sertralin\w*|risperid\w*|paroxet\w*|fluoxet\w*|escitalopr\w*|"
+        r"olanzapin\w*|clonazepam\w*|alprazolam\w*|lorazepam\w*|diazepam\w*|"
+        r"benzodiacep\w*|antidepres\w*|ansiol[ií]tic\w*|neurol[eé]ptic\w*|"
+        r"antipsic[oó]tic\w*|psicof[aá]rmac\w*|estabilizador del (?:a)?nimo|"
+        r"\bdosis\b|medicaci[oó]n|medication"
+        r")"
+    ),
+    # Mental health professionals and settings
+    re.compile(
+        r"(?i)\b("
+        r"psiqu[ií]atr\w*|psychiatr\w*|neuropsiqu\w*|neuropsych\w*|"
+        r"psic[oó]log\w*|psycholog\w*|terapeut\w*|therapist\w*|terapia\b|therapy\b|"
+        r"psicoan[aá]l\w*|internarme|internarse|hospitaliz\w*|internamiento|"
+        r"pabell[oó]n psiqui\w*|salud mental|mental health"
+        r")"
+    ),
+    # Bereavement, severe illness, disability, chronic conditions
+    re.compile(
+        r"(?i)\b("
+        r"muri[oó]|fallec\w*|died|passed away|c[aá]ncer|diagnostic\w*|"
+        r"discapacidad\w*|disabled\w*|cr[oó]nic[ao]\w*|chronic\b|"
+        r"artritis|fibromialgi\w*|dolor cr[oó]nic\w*|chronic pain|"
+        r"ajustes razonables|accommodations"
+        r")"
+    ),
+    # Abuse, violence, distress
+    re.compile(r"(?i)\b(abuso\w*|abuse\w*|violencia|violence|acoso|harassment|bullying|maltrato)"),
+    # Direct cries for help / isolation
+    re.compile(
+        r"(?i)\b(ayuda en serio|help me for real|estoy mal de verdad|i'm really not ok|me siento (?:muy )?solo|i feel (?:so )?alone|no tengo a nadie)"
+    ),
 ]
 
 # ARC triggers — ethics, system critique, vulnerability+depth, identity, contradiction
@@ -341,6 +422,54 @@ MODIFIER_GUIDANCE: dict[PresetModifier, str] = {
 }
 
 
+# Safety overlay appended to the system prompt when the user has crossed
+# VULNERABLE_THRESHOLD. See insult/core/vulnerability.py and APA Health
+# Advisory on AI chatbots for the rationale. This overrides the abrasive
+# persona for this turn so a user in active psychiatric treatment does NOT
+# get roasted because their current message happens to look casual.
+_VULNERABLE_OVERLAY_PROMPT = (
+    "\n## SAFETY OVERLAY — Vulnerable user (persistent across turns)\n"
+    "This person has disclosed, across previous conversations, a cluster of "
+    "clinical or trauma-related signals (diagnosis, psychiatric medication, "
+    "mental-health clinician involvement, hospitalization, chronic illness). "
+    "Treat them with care this turn REGARDLESS of what the current message "
+    "looks like on its own.\n\n"
+    "Non-negotiable rules:\n"
+    "- Do NOT default to abrasive, dismissive, or cortante tone with this "
+    "person. A curt reply reads as contempt when someone is navigating "
+    "treatment. Respond with substance (medium length).\n"
+    "- You are NOT a substitute for professional mental-health care. If the "
+    "user mentions a dose change, a new symptom, or something their clinician "
+    "should weigh in on, name that option explicitly and without condescension.\n"
+    "- If they ask about specific medications, diagnoses, or treatments by "
+    "name, use the web_search tool against authoritative sources "
+    "(medlineplus.gov in Spanish, cima.aemps.es, nih.gov, nimh.nih.gov) and "
+    "cite what you find. Never invent pharmacology, dosing, or interactions.\n"
+    "- Match their register. If they joke ('jeje'), you can be warm and light. "
+    "Warmth ≠ performative cheerfulness. Honesty over reassurance.\n"
+    "- Crisis resources (Mexico) — mention ONLY when the user expresses "
+    "acute distress, self-harm ideation, or says they are not safe. Not on "
+    "every message:\n"
+    "  - SAPTEL: 55 5259 8121 (24/7, gratuito)\n"
+    "  - Línea de la Vida: 800 290 0024 (24/7, gratuito)\n"
+)
+
+
+def build_vulnerable_overlay_prompt() -> str:
+    """Return the safety overlay text appended when a user is vulnerable."""
+    return _VULNERABLE_OVERLAY_PROMPT
+
+
+def is_vulnerable_overlay_selection(selection: PresetSelection) -> bool:
+    """True if the PresetSelection was produced by the vulnerable-user branch.
+
+    Callers that build the system prompt use this to decide whether to append
+    the safety overlay. The reason string is the canonical marker so we don't
+    have to add a new field to PresetSelection (keeping it backwards compatible
+    with existing telemetry consumers)."""
+    return selection.reason.startswith("vulnerable_user_overlay")
+
+
 # ---------------------------------------------------------------------------
 # Classifier — rule-based, zero-cost, fast
 # ---------------------------------------------------------------------------
@@ -401,6 +530,25 @@ def classify_preset(
             if len(fact_words & msg_words) >= 2:
                 modifiers.append(PresetModifier.MEMORY_RECALL)
                 break
+
+    # --- Priority 0: Vulnerable user overlay (wins over every preset) ---
+    # If the user has accumulated enough clinical/trauma signals in their
+    # long-term facts, we classify RESPECTFUL_SERIOUS regardless of what the
+    # current message looks like. This exists because a user with Complex
+    # PTSD + active psychiatric treatment writing "he dormido bien hoy" was
+    # falling through to DEFAULT_ABRASIVE — technically correct by the
+    # current-message signal, but ethically wrong given the conversation
+    # history. See insult/core/vulnerability.py for scoring rationale and
+    # APA/MIND-SAFE references.
+    vuln_score = compute_vulnerability_score(user_facts)
+    if vuln_score >= VULNERABLE_THRESHOLD:
+        signals = matched_signal_groups(user_facts)
+        return PresetSelection(
+            mode=PresetMode.RESPECTFUL_SERIOUS,
+            modifiers=modifiers,
+            confidence=min(0.8 + (vuln_score - VULNERABLE_THRESHOLD) * 0.05, 1.0),
+            reason=f"vulnerable_user_overlay: score={vuln_score} signals={signals}",
+        )
 
     # --- Priority 1: RESPECTFUL_SERIOUS ---
     serious_hits = _count_pattern_hits(current_message, _SERIOUS_PATTERNS)

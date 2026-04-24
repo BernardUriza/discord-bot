@@ -10,7 +10,13 @@ from datetime import datetime
 import structlog
 
 from insult.core.flows import FlowAnalysis, build_flow_prompt
-from insult.core.presets import PresetSelection, build_preset_prompt, classify_preset
+from insult.core.presets import (
+    PresetSelection,
+    build_preset_prompt,
+    build_vulnerable_overlay_prompt,
+    classify_preset,
+    is_vulnerable_overlay_selection,
+)
 
 log = structlog.get_logger()
 
@@ -597,12 +603,22 @@ def build_adaptive_prompt(
     preset_prompt = build_preset_prompt(preset)
     prompt += f"\n\n{preset_prompt}"
 
+    # --- Layer 3.1: Vulnerable-user safety overlay ---
+    # Appended only when the classifier routed here via the vulnerable-user
+    # branch (accumulated clinical/trauma signals in the user's facts). This
+    # overlay overrides the abrasive persona for this turn; see
+    # insult/core/presets.py::_VULNERABLE_OVERLAY_PROMPT for the exact rules
+    # and insult/core/vulnerability.py for the scoring that flags a user.
+    if is_vulnerable_overlay_selection(preset):
+        prompt += build_vulnerable_overlay_prompt()
+
     log.info(
         "preset_classified",
         mode=preset.mode.value,
         modifiers=[m.value for m in preset.modifiers],
         confidence=round(preset.confidence, 2),
         reason=preset.reason,
+        vulnerable_overlay=is_vulnerable_overlay_selection(preset),
     )
 
     # --- Layer 3.5: Flow behavioral guidance ---

@@ -32,7 +32,7 @@ from insult.core.facts import build_facts_prompt, extract_facts
 from insult.core.flows import ExpressionHistory, analyze_flows, build_flow_prompt, validate_flow_adherence
 from insult.core.guild_setup import post_facts_to_channel, post_reminder_set
 from insult.core.image_summary import summarize_images
-from insult.core.llm import WEB_SEARCH_TOOL
+from insult.core.llm import MEDICAL_WEB_SEARCH_TOOL, WEB_SEARCH_TOOL
 from insult.core.presets import PresetMode, PresetModifier
 from insult.core.reactions import add_reactions, parse_reactions, strip_reactions
 from insult.core.reminders import REMINDER_TOOLS, format_reminder_list, parse_remind_at
@@ -358,9 +358,18 @@ class ChatCog(commands.Cog):
                 verbosity=round(profile.avg_word_count, 1),
             )
 
-        # Build tools list: static tools + web search (disabled during crisis)
+        # Build tools list: static tools + a web_search variant.
+        # For RESPECTFUL_SERIOUS (clinical topics / vulnerable users) the
+        # search tool is DOMAIN-RESTRICTED to authoritative medical sources
+        # (MedlinePlus, AEMPS CIMA, NIH, WHO). This exists because a bot
+        # answering medication or diagnosis questions with a random blog
+        # post is a documented harm mode (APA Health Advisory) — so we
+        # swap the tool definition rather than disable search entirely,
+        # which used to leave the model with no way to verify pharmacology.
         tools = list(_ALL_TOOLS)
-        if preset.mode != PresetMode.RESPECTFUL_SERIOUS:
+        if preset.mode == PresetMode.RESPECTFUL_SERIOUS:
+            tools.append(MEDICAL_WEB_SEARCH_TOOL)
+        else:
             tools.append(WEB_SEARCH_TOOL)
 
         # If user wants a server action, force tool_choice="any" so Claude MUST use the tool.

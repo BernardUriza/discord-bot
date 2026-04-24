@@ -112,14 +112,23 @@ class TestChatCog:
         tool_types = [t.get("type", "") for t in tools]
         assert "web_search_20250305" in tool_types
 
-    async def test_web_search_disabled_on_crisis(self, cog, mock_ctx):
-        """Web search should NOT be passed during RESPECTFUL_SERIOUS (crisis)."""
+    async def test_medical_web_search_enabled_on_crisis(self, cog, mock_ctx):
+        """During RESPECTFUL_SERIOUS, web_search is still passed but the
+        tool definition is the DOMAIN-RESTRICTED medical variant so the
+        model can only pull from trusted sources (MedlinePlus, CIMA/AEMPS,
+        NIH). Before v3.5.4 web_search was disabled entirely, which left
+        the bot unable to verify pharmacology when a user asked about
+        their medication — see APA Health Advisory."""
         cog.llm.chat = AsyncMock(return_value=LLMResponse(text="Habla. Que pasa?"))
         await self._call_chat(cog, mock_ctx, "me quiero morir")
         call_kwargs = cog.llm.chat.call_args
         tools = call_kwargs.kwargs.get("tools", [])
-        tool_types = [t.get("type", "") for t in tools]
-        assert "web_search_20250305" not in tool_types
+        web_search_tools = [t for t in tools if t.get("type") == "web_search_20250305"]
+        # Exactly one web_search tool, and it's the medical (allowlisted) variant.
+        assert len(web_search_tools) == 1
+        assert "allowed_domains" in web_search_tools[0]
+        assert "medlineplus.gov" in web_search_tools[0]["allowed_domains"]
+        assert "cima.aemps.es" in web_search_tools[0]["allowed_domains"]
 
     @patch("insult.cogs.chat.send_response", new_callable=AsyncMock)
     async def test_inaugurate_channel_generates_message(self, mock_send, cog):

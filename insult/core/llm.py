@@ -144,11 +144,39 @@ class LLMResponse:
     model_used: str = ""  # populated by chat() — reflects the model that actually produced the text
 
 
-# Web search tool definition — Claude's native server-side search
+# Web search tool definition — Claude's native server-side search.
+#
+# Two variants:
+#   - WEB_SEARCH_TOOL: general-purpose, any domain. Used outside of
+#     clinical/safety contexts.
+#   - MEDICAL_WEB_SEARCH_TOOL: constrained to authoritative medical sources
+#     and localized to Mexico. Used when the user is flagged as vulnerable
+#     or the preset is RESPECTFUL_SERIOUS so that the bot cannot cite a
+#     random wellness blog about quetiapine dosing. See APA Health Advisory
+#     and MIND-SAFE framework references in vulnerability.py.
 WEB_SEARCH_TOOL = {
     "type": "web_search_20250305",
     "name": "web_search",
     "max_uses": 3,
+}
+
+MEDICAL_WEB_SEARCH_TOOL = {
+    "type": "web_search_20250305",
+    "name": "web_search",
+    "max_uses": 3,
+    "allowed_domains": [
+        "medlineplus.gov",  # NIH patient-facing drug + condition info (Spanish + English)
+        "cima.aemps.es",  # AEMPS CIMA — Spanish regulatory drug leaflets (prospectos + fichas técnicas)
+        "nih.gov",  # National Institutes of Health
+        "nimh.nih.gov",  # National Institute of Mental Health
+        "who.int",  # World Health Organization
+        "salud.gob.mx",  # Mexican Secretaría de Salud
+    ],
+    "user_location": {
+        "type": "approximate",
+        "country": "MX",
+        "timezone": "America/Mexico_City",
+    },
 }
 
 
