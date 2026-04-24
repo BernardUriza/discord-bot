@@ -72,9 +72,7 @@ async def execute_reminder_call(
                 recurring=recurring,
             )
             if guild_id:
-                mention_display = (
-                    " ".join(f"<@{uid.strip()}>" for uid in mention_ids if uid) if mention_ids else ""
-                )
+                mention_display = " ".join(f"<@{uid.strip()}>" for uid in mention_ids if uid) if mention_ids else ""
                 await post_reminder_set(
                     bot,
                     memory,
@@ -174,9 +172,7 @@ async def inaugurate_channel(
     time_ctx = _get_current_time_context()
 
     creator_facts = await load_facts(memory, str(creator.id))
-    facts_str = (
-        ", ".join(f["fact"] for f in creator_facts) if creator_facts else "no los conozco todavia"
-    )
+    facts_str = ", ".join(f["fact"] for f in creator_facts) if creator_facts else "no los conozco todavia"
 
     inaugural_prompt = (
         f"{settings.system_prompt}\n\n"

@@ -201,9 +201,7 @@ async def run_turn(
             summaries = await memory.get_channel_summaries(str(message.guild.id), exclude_channel_id=channel_id)
             if summaries:
                 accessible = {
-                    str(ch.id)
-                    for ch in message.guild.text_channels
-                    if ch.permissions_for(message.author).read_messages
+                    str(ch.id) for ch in message.guild.text_channels if ch.permissions_for(message.author).read_messages
                 }
                 summaries = filter_by_permissions(summaries, accessible)
                 server_pulse = build_server_pulse(summaries, text)
@@ -229,9 +227,7 @@ async def run_turn(
     arc_state = arc_from_dict(arc_data) if arc_data else ArcState()
 
     # Recent response lengths for Fix #3 (length variation hint)
-    recent_response_lengths = [
-        len(m.get("content", "").split()) for m in recent if m["role"] == "assistant"
-    ][-5:]
+    recent_response_lengths = [len(m.get("content", "").split()) for m in recent if m["role"] == "assistant"][-5:]
 
     # --- System prompt assembly (preset + flows + arc + facts) ---
     context_key = f"{channel_id}:{user_id}"
