@@ -5,3 +5,15 @@ __pycache__/
 *.db
 storage/
 .DS_Store
+
+# Test artifacts
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+
+# Claude Code tooling state (local-only, never commit)
+.claude/plans/
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+.claude/SESSION_STATE.md
