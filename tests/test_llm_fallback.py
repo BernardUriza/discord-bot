@@ -8,7 +8,7 @@ legacy reinforced-retry when primary == fallback.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -20,6 +20,20 @@ def client():
     # No real network — AsyncAnthropic is instantiated but never used (we patch _send).
     with patch("insult.core.llm.anthropic.AsyncAnthropic"):
         return LLMClient(api_key="fake", model="sonnet-default", max_tokens=512, timeout=1.0, max_retries=1)
+
+
+def _mock_stream_raises(anthropic_client, exc):
+    """Configure `anthropic_client.messages.stream(...)` to return a context manager
+    that raises `exc` on entry. Used to simulate network errors in _send().
+
+    Returns the outer MagicMock so tests can assert on `.call_count`
+    (stream() is a sync factory, not awaited — use call_count not await_count).
+    """
+    stream_cm = MagicMock()
+    stream_cm.__aenter__ = AsyncMock(side_effect=exc)
+    stream_cm.__aexit__ = AsyncMock(return_value=None)
+    anthropic_client.messages.stream = MagicMock(return_value=stream_cm)
+    return anthropic_client.messages.stream
 
 
 def _mk(text: str, model: str = "") -> LLMResponse:
@@ -203,7 +217,7 @@ async def test_on_timeout_callback_fires_once_after_first_timeout():
     fake_request = object()  # anthropic.APITimeoutError only needs *a* request object
     timeout_exc = anthropic.APITimeoutError(request=fake_request)  # type: ignore[arg-type]
 
-    c.client.messages.create = AsyncMock(side_effect=timeout_exc)
+    _mock_stream_raises(c.client, timeout_exc)
 
     callback_fires = 0
 
@@ -233,7 +247,7 @@ async def test_send_breaks_after_two_timeouts_without_reaching_max_retries():
     fake_request = object()
     timeout_exc = anthropic.APITimeoutError(request=fake_request)  # type: ignore[arg-type]
 
-    c.client.messages.create = AsyncMock(side_effect=timeout_exc)
+    stream_mock = _mock_stream_raises(c.client, timeout_exc)
 
     with (
         patch("insult.core.llm.asyncio.sleep", new=AsyncMock()),
@@ -242,6 +256,6 @@ async def test_send_breaks_after_two_timeouts_without_reaching_max_retries():
         await c._send("system", [{"role": "user", "content": "hi"}])
 
     # Exactly 2 attempts — not 5. If this fails, someone silently re-extended retries.
-    assert c.client.messages.create.await_count == 2, (
-        f"expected 2 attempts (short-circuited at _MAX_TIMEOUT_RETRIES), got {c.client.messages.create.await_count}"
+    assert stream_mock.call_count == 2, (
+        f"expected 2 attempts (short-circuited at _MAX_TIMEOUT_RETRIES), got {stream_mock.call_count}"
     )

@@ -6,6 +6,7 @@ from insult.core.character import (
     deduplicate_opener,
     detect_anti_patterns,
     detect_break,
+    detect_clarification_dump,
     enforce_length_variation,
     get_length_hint,
     normalize_formatting,
@@ -574,3 +575,62 @@ class TestStripEchoedQuotes:
         result = strip_echoed_quotes(response, user)
         assert "define todo tu tour" in result
         assert "No he fotografiado" not in result
+
+
+class TestDetectClarificationDump:
+    """The bot must not dump the task back at the user when context is available.
+
+    These are the exact phrases that triggered the 2026-04-23 regression where
+    Insult answered 'Dime qué busco.' to a user who had just said 'Es solo una
+    búsqueda sencilla. Hazla.' with 6 prior messages of topic context.
+    """
+
+    def test_production_regression_dime_que_busco(self):
+        """The literal phrase from the 03:50 UTC incident."""
+        assert detect_clarification_dump("Dime qué busco.") != []
+
+    def test_dime_que_variants(self):
+        assert detect_clarification_dump("dime qué buscar") != []
+        assert detect_clarification_dump("Dime qué hacer con esto.") != []
+        assert detect_clarification_dump("dime qué quieres que te diga") != []
+        assert detect_clarification_dump("Dime qué necesitas ahora.") != []
+
+    def test_que_quieres_que(self):
+        assert detect_clarification_dump("¿Qué quieres que busque?") != []
+        assert detect_clarification_dump("qué quieres que haga") != []
+        assert detect_clarification_dump("¿Qué quieres que diga exactamente?") != []
+
+    def test_a_que_te_refieres(self):
+        assert detect_clarification_dump("A qué te refieres.") != []
+        assert detect_clarification_dump("¿a qué te refieres con eso?") != []
+
+    def test_repite_imperative(self):
+        assert detect_clarification_dump("Repite.") != []
+        assert detect_clarification_dump("repite la pregunta") != []
+        assert detect_clarification_dump("Dame más detalle.\nRepite.") != []
+
+    def test_se_mas_especifico(self):
+        assert detect_clarification_dump("Sé más específico.") != []
+        assert detect_clarification_dump("Específicame qué parte.") != []
+        assert detect_clarification_dump("se especifico") != []
+
+    # --- False positives we must AVOID (legitimate probing) ---
+
+    def test_probing_why_question_not_flagged(self):
+        """'Por qué crees eso?' is DEFAULT_ABRASIVE-compliant curiosity, not a dump."""
+        assert detect_clarification_dump("¿Por qué crees eso?") == []
+        assert detect_clarification_dump("¿Qué te hace pensar así?") == []
+
+    def test_dime_que_paso_not_flagged(self):
+        """'Dime qué pasó' is a legitimate probe, different from 'dime qué busco'."""
+        assert detect_clarification_dump("Dime qué pasó anoche.") == []
+        assert detect_clarification_dump("Dime qué sentiste cuando te dijo eso.") == []
+
+    def test_reflective_self_talk_not_flagged(self):
+        """User-directed speech that MENTIONS these verbs but doesn't demand clarification."""
+        assert detect_clarification_dump("No sé qué buscas en esta vida.") == []
+        assert detect_clarification_dump("Tú quieres que te responda lo que quieres oír.") == []
+
+    def test_empty_and_no_match(self):
+        assert detect_clarification_dump("") == []
+        assert detect_clarification_dump("Respuesta directa sin deflexión.") == []

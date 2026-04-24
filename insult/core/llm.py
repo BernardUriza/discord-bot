@@ -13,8 +13,10 @@ from insult.core.actions import ToolCall
 from insult.core.character import (
     CACHE_BOUNDARY,
     CHARACTER_REINFORCEMENT,
+    CONTEXT_REINFORCEMENT,
     detect_anti_patterns,
     detect_break,
+    detect_clarification_dump,
     normalize_formatting,
     sanitize,
     strip_lists,
@@ -294,7 +296,20 @@ class LLMClient:
                     if tool_choice:
                         kwargs["tool_choice"] = tool_choice
 
-                response = await self.client.messages.create(**kwargs)
+                # Use streaming transport + .get_final_message() instead of
+                # .messages.create(). Anthropic explicitly recommends streaming
+                # for long-running requests (see Errors doc § Long requests and
+                # the 504 timeout_error guidance). With server-side tools like
+                # web_search that can pause the model for 10s+ per use, a
+                # non-streaming socket is vulnerable to idle dropouts and to
+                # our own 30s httpx read timeout. Streaming keeps SSE events
+                # flowing which resets the per-read timeout, letting the full
+                # turn run up to the SDK's native 10-minute cap. The post-
+                # generation pipeline (character break, language_cure, etc.)
+                # is unaffected because .get_final_message() returns the same
+                # Message object shape as .create().
+                async with self.client.messages.stream(**kwargs) as stream:
+                    response = await stream.get_final_message()
                 cache_read = getattr(response.usage, "cache_read_input_tokens", 0) or 0
                 cache_create = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
                 block_types: dict[str, int] = {}
@@ -559,6 +574,49 @@ class LLMClient:
                 exit_reason="character_break_recovered" if retry_response is not None else "character_break_sanitized",
             )
             return final
+
+        # Context-first enforcement. When the model produces a clarification
+        # dump ("dime qué busco", "a qué te refieres", "repite") even though
+        # the conversation has >3 messages of context, that clarification
+        # should have been answered from memory. Retry once against the
+        # primary with CONTEXT_REINFORCEMENT appended. No fallback model —
+        # the issue is prompt obedience, not model capability. If the retry
+        # still dumps, ship it anyway (soft enforcement, not a hard block).
+        if len(messages) > 3:
+            clarification_hits = detect_clarification_dump(response.text)
+            if clarification_hits:
+                log.warning(
+                    "clarification_dump_detected",
+                    model=primary,
+                    patterns=clarification_hits,
+                    text_preview=response.text[:200],
+                    text_len=len(response.text),
+                    context_messages=len(messages),
+                )
+                try:
+                    retry = await self._send(
+                        system_prompt + CONTEXT_REINFORCEMENT,
+                        messages,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        model=primary,
+                        on_timeout=on_timeout,
+                    )
+                    retry.text = strip_metadata(retry.text)
+                    retry_hits = detect_clarification_dump(retry.text)
+                    if not retry_hits:
+                        log.info("clarification_dump_fixed_on_retry", model=primary)
+                        response = retry
+                    else:
+                        log.warning(
+                            "clarification_dump_persisted",
+                            model=primary,
+                            patterns=retry_hits,
+                        )
+                        # Don't re-retry — the anti-pattern is soft and
+                        # shipping the original is better than an infinite loop.
+                except Exception:
+                    log.exception("clarification_dump_retry_failed", model=primary)
 
         # Log anti-pattern drift — soft escalate to the fallback tier when distinct.
         anti_patterns = detect_anti_patterns(response.text)

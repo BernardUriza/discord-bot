@@ -49,8 +49,10 @@ def _mk_response(text: str, stop_reason: str = "end_turn"):
 
 
 def _mk_client_with_sequence(responses: list):
-    """Build a fake LLMClient where successive `messages.create` calls return
-    the given responses in order. Useful when chat() fires primary + cure."""
+    """Build a fake LLMClient where the PRIMARY response comes from `messages.stream()`
+    (v3.5.11 switched `_send` to streaming transport so long web_search turns don't
+    trip the 30s read timeout), and subsequent responses feed `language_cure` which
+    still uses `messages.create` because it is a short Haiku call."""
     client = LLMClient(
         api_key="fake",
         model="claude-sonnet-4-6",
@@ -60,7 +62,23 @@ def _mk_client_with_sequence(responses: list):
         cure_model="claude-haiku-4-5-20251001",
     )
     client.client = AsyncMock()
-    client.client.messages.create = AsyncMock(side_effect=responses)
+
+    primary = responses[0]
+    cure_responses = responses[1:]
+
+    # Primary: messages.stream(...) returns an async ctx manager whose .get_final_message()
+    # yields `primary`. Needs to be MagicMock (not AsyncMock) because stream() is a sync
+    # factory that returns a context manager — the awaiting happens inside `async with`.
+    stream_obj = AsyncMock()
+    stream_obj.get_final_message = AsyncMock(return_value=primary)
+    stream_cm = MagicMock()
+    stream_cm.__aenter__ = AsyncMock(return_value=stream_obj)
+    stream_cm.__aexit__ = AsyncMock(return_value=None)
+    client.client.messages.stream = MagicMock(return_value=stream_cm)
+
+    # Cure path (if any): language_cure still goes through messages.create.
+    if cure_responses:
+        client.client.messages.create = AsyncMock(side_effect=cure_responses)
     return client
 
 
@@ -157,9 +175,10 @@ class TestPipelineOrdering:
             ]
         )
         await client.chat("sys", [{"role": "user", "content": "hi"}])
-        # Second call is the cure — its user content must be what strip_metadata
-        # produced from the primary, never the raw primary output.
-        cure_call = client.client.messages.create.call_args_list[1]
+        # The cure is the ONLY call to messages.create (primary now flows through
+        # messages.stream since v3.5.11). Its user content must be what
+        # strip_metadata produced from the primary, never the raw primary output.
+        cure_call = client.client.messages.create.call_args_list[0]
         cure_user_msg = cure_call.kwargs["messages"][0]["content"]
         assert "[SEND]" not in cure_user_msg
         assert "<<<" not in cure_user_msg

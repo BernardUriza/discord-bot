@@ -61,6 +61,21 @@ CHARACTER_REINFORCEMENT = (
     "This is your LAST chance to get it right.]"
 )
 
+# Reinforcement appended when the model produces a clarification-dump response
+# ("dime qué busco", "a qué te refieres", "repite") despite having conversation
+# context. Fires via `detect_clarification_dump` + retry path in llm.chat().
+# Kept distinct from CHARACTER_REINFORCEMENT because the failure mode is
+# different — the bot is not out of character, it is being lazy and tossing
+# the task back at the user instead of reading the scrollback.
+CONTEXT_REINFORCEMENT = (
+    "\n\n[SYSTEM REMINDER: Your previous response asked the user to clarify, "
+    "repeat, or specify something they almost certainly already told you. "
+    "Scan the last 20 messages of conversation context above — the answer is "
+    "there. Do NOT hand back a clarifying question. Pick the most likely "
+    "interpretation from the context and answer with a declarative statement. "
+    "This is your LAST chance to use the context you already have.]"
+)
+
 IDENTITY_REINFORCE_THRESHOLD = 10
 IDENTITY_REINFORCEMENT_SUFFIX = (
     "\n\n[REINFORCEMENT — This is a long conversation. Stay in character. "
@@ -140,6 +155,45 @@ ANTI_PATTERN_CHECKS = [
         r"you(?:'re| are) (?:right|wrong|amazing|incredible))\b.{10,}"
     ),
 ]
+
+
+# ---------------------------------------------------------------------------
+# Clarification-dump detection (context-first enforcement)
+# ---------------------------------------------------------------------------
+#
+# These patterns fire when the bot responds by dumping the task back at the
+# user — asking them to repeat, clarify, or specify something the conversation
+# context almost certainly already answered. The classic 2026-04-23 regression:
+# user says "Es solo una búsqueda sencilla. Hazla." and the bot replies
+# "Dime qué busco." even though the previous 6 messages had the topic.
+#
+# Narrow on purpose: we only match patterns where the bot is explicitly
+# punting. Legitimate probing questions ("¿Por qué crees que X?", "¿Qué te
+# hace pensar eso?") are DEFAULT_ABRASIVE-compliant and MUST NOT match.
+#
+# Used by llm.chat() when len(messages) > 3 to trigger a retry with
+# CONTEXT_REINFORCEMENT appended. See persona.md § "Context-First Rule".
+CLARIFICATION_DUMP_PATTERNS = [
+    # "dime qué [busco/buscar/hago/hacer/quieres/necesitas]" — dumping work back
+    re.compile(r"(?i)\bdime\s+(?:qu[eé]|cu[aá]l)\s+(?:busco|buscar|hago|hacer|quieres|necesitas)\b"),
+    # "qué quieres que [busque/haga/diga/responda/pregunte/encuentre]" — deflection
+    re.compile(r"(?i)\bqu[eé]\s+quieres\s+que\s+(?:busque|haga|diga|responda|pregunte|encuentre)\b"),
+    # "a qué te refieres" — forcing user to expand
+    re.compile(r"(?i)\ba\s+qu[eé]\s+te\s+refieres\b"),
+    # "repite" as standalone imperative at end of a line / sentence
+    re.compile(r"(?im)(?<!\w)repite(?:\s+(?:la\s+pregunta|lo\s+que|por\s+favor|eso))?[.!?]?\s*$"),
+    # "específicame" / "sé (más) específico" — dumping specificity back
+    re.compile(r"(?i)\b(?:s[eé]\s+(?:m[aá]s\s+)?espec[íi]fico|espec[íi]fica(?:me)?)\b"),
+]
+
+
+def detect_clarification_dump(text: str) -> list[str]:
+    """Returns list of matched clarification-dump patterns found in text.
+
+    An empty list means the response did NOT deflect the task back to the user.
+    A non-empty list means at least one deflection pattern matched.
+    """
+    return [p.pattern for p in CLARIFICATION_DUMP_PATTERNS if p.search(text)]
 
 
 def detect_break(text: str) -> list[str]:
