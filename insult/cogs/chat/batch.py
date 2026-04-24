@@ -88,6 +88,22 @@ class BatchManager:
         text = message.content.strip()
         if message.flags.voice and message.attachments:
             text = await transcribe_voice(message, settings) or ""
+            # Echo the transcription to the channel so non-listeners (and
+            # future log readers) can see what was said. Discord voice
+            # messages are otherwise opaque unless you hit play. We use
+            # channel.send directly (not send_response) so no version tag
+            # or [SEND]-chunking is applied — this is a sidecar, not a
+            # bot turn of its own.
+            if text:
+                try:
+                    echo = f"**{message.author.display_name} dijo** 🔊 {text}"
+                    # Discord hard limit is 2000 chars per message; truncate
+                    # with an ellipsis if Whisper produced a novel.
+                    if len(echo) > 1990:
+                        echo = echo[:1987] + "…"
+                    await message.channel.send(echo)
+                except Exception:
+                    log.exception("voice_transcription_echo_failed")
 
         # Empty message (sticker-only, reaction-only, etc.)
         if not text and not message.attachments:
