@@ -612,7 +612,9 @@ class TestPhase2Enhancements:
         epistemic = EpistemicAnalysis(0.0, 0.0, 0.0, False, 0, EpistemicMove.NONE, "test")
         # A message that hits no special branches (medium word count, default preset)
         msg = "pues no se que pensar de todo esto la verdad"
-        with patch("insult.core.flows.random.random", return_value=0.1):
+        # After the v3.5.6 flows-package refactor, `random` is imported inside
+        # the ExpressionAnalyzer module. The monkeypatch target moves with it.
+        with patch("insult.core.flows.analyzers.expression.random.random", return_value=0.1):
             shape, reason, _ = _select_shape(msg, _preset(), pressure, epistemic, [])
         assert shape == ResponseShape.EXPRESSIVE_THINKING
         assert "expressive_mode" in reason
