@@ -10,6 +10,7 @@ from datetime import datetime
 import structlog
 
 from insult.core.flows import FlowAnalysis, build_flow_prompt
+from insult.core.patterns import COMMON_STOPWORDS
 from insult.core.presets import (
     PresetSelection,
     build_preset_prompt,
@@ -296,22 +297,9 @@ def normalize_formatting(text: str) -> str:
 # Anti-parrot — strip verbatim quotes of user message from response
 # ---------------------------------------------------------------------------
 
-_QUOTE_STOPWORDS = {
-    "de",
-    "la",
-    "el",
-    "en",
-    "que",
-    "es",
-    "un",
-    "una",
-    "y",
-    "a",
+_QUOTE_STOPWORDS = COMMON_STOPWORDS | {
     "los",
     "las",
-    "no",
-    "se",
-    "lo",
     "por",
     "con",
     "para",
@@ -327,8 +315,6 @@ _QUOTE_STOPWORDS = {
     "mas",
     "pero",
     "como",
-    "the",
-    "is",
     "and",
     "but",
 }

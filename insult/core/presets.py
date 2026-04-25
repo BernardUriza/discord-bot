@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from insult.core.patterns import COMMON_STOPWORDS
 from insult.core.vulnerability import (
     VULNERABLE_THRESHOLD,
     compute_vulnerability_score,
@@ -246,7 +247,7 @@ _ACTION_INTENT_PATTERNS = [
 ]
 
 # Stopwords filtered out when checking memory recall overlap
-_RECALL_STOPWORDS = {"de", "la", "el", "en", "que", "es", "un", "una", "y", "a", "the", "is", "no", "me", "se", "lo"}
+_RECALL_STOPWORDS = COMMON_STOPWORDS | {"me"}
 
 # CONTEMPT modifier triggers — low-effort messages
 _CONTEMPT_PATTERNS = [

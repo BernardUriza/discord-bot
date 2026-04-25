@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 
 import structlog
 
+from insult.core.patterns import COMMON_STOPWORDS
+
 log = structlog.get_logger()
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -27,29 +29,14 @@ _MAX_STANCES_PER_RESPONSE = 3
 _MIN_ASSERTION_DENSITY = 0.4
 _MAX_STANCES_IN_PROMPT = 5
 
-_STANCE_STOPWORDS = {
-    "de",
-    "la",
-    "el",
-    "en",
-    "que",
-    "es",
-    "un",
-    "una",
-    "y",
-    "a",
+_STANCE_STOPWORDS = COMMON_STOPWORDS | {
     "los",
     "las",
-    "no",
-    "se",
-    "lo",
     "por",
     "con",
     "para",
     "del",
     "al",
-    "the",
-    "is",
     "are",
     "not",
     "this",

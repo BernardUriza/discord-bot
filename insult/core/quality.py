@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 
 import structlog
 
+from insult.core.patterns import COMMON_STOPWORDS
+
 log = structlog.get_logger()
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -20,22 +22,9 @@ log = structlog.get_logger()
 
 _WORD_RE = re.compile(r"[a-záéíóúüñ]+", re.IGNORECASE)
 
-_QUALITY_STOPWORDS = {
-    "de",
-    "la",
-    "el",
-    "en",
-    "que",
-    "es",
-    "un",
-    "una",
-    "y",
-    "a",
+_QUALITY_STOPWORDS = COMMON_STOPWORDS | {
     "los",
     "las",
-    "no",
-    "se",
-    "lo",
     "por",
     "con",
     "para",
@@ -54,8 +43,6 @@ _QUALITY_STOPWORDS = {
     "esta",
     "esto",
     "eso",
-    "the",
-    "is",
     "are",
     "not",
     "this",
