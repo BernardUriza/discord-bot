@@ -25,7 +25,14 @@ from collections.abc import Callable
 import discord
 import structlog
 
-from insult.cogs.chat.context import build_context, load_facts_smart
+from insult.cogs.chat.context import (
+    build_context,
+    load_facts_smart,
+    load_other_participants_facts,
+    load_server_pulse,
+    store_user_message,
+    update_style_profile,
+)
 from insult.cogs.chat.tasks import extract_user_facts
 from insult.cogs.chat.tools import execute_reminder_call, execute_tool_calls
 from insult.core.arc_tracker import ArcState, arc_from_dict, arc_to_dict, build_arc_prompt, update_arc
@@ -46,7 +53,6 @@ from insult.core.llm import MEDICAL_WEB_SEARCH_TOOL, WEB_SEARCH_TOOL
 from insult.core.presets import PresetMode, PresetModifier
 from insult.core.reactions import add_reactions, parse_reactions, strip_reactions
 from insult.core.routing import ModelTier, OpusBudget, select_model
-from insult.core.summaries import build_server_pulse, filter_by_permissions
 from insult.core.triviality import is_trivial
 
 log = structlog.get_logger()
@@ -137,26 +143,19 @@ async def run_turn(
     channel_name = message.channel.name if hasattr(message.channel, "name") else None
 
     # --- Memory store + style profile ---
-    try:
-        await memory.store(
-            channel_id,
-            user_id,
-            user_name,
-            "user",
-            text_for_memory,
-            guild_id=guild_id,
-            channel_name=channel_name,
-        )
-    except Exception:
-        log.exception("chat_store_user_failed", channel_id=channel_id)
+    await store_user_message(
+        memory,
+        channel_id,
+        user_id,
+        user_name,
+        text_for_memory,
+        guild_id,
+        channel_name,
+    )
 
     # Update style profile BEFORE the trivial gate so short-message users
     # still accumulate signal for language/formality/emoji detection.
-    try:
-        profile = await memory.update_profile(user_id, text)
-    except Exception:
-        log.exception("chat_profile_update_failed", user_id=user_id)
-        profile = None
+    profile = await update_style_profile(memory, user_id, text)
 
     log.info(
         "stage_memory_stored",
@@ -188,30 +187,10 @@ async def run_turn(
     log.info("stage_facts_loaded", facts_count=len(user_facts), elapsed_ms=_stage_elapsed())
 
     # Load facts for ALL other participants in channel (group-chat awareness)
-    other_participants_facts: dict[str, list[dict]] = {}
-    try:
-        participants = await memory.get_channel_participants(channel_id, limit=10)
-        for p in participants:
-            if p["user_id"] != user_id:
-                facts = await memory.get_facts(p["user_id"])
-                if facts:
-                    other_participants_facts[p["user_name"]] = facts[:5]
-    except Exception:
-        log.exception("chat_participants_facts_failed")
+    other_participants_facts = await load_other_participants_facts(memory, channel_id, user_id)
 
     # Server pulse (cross-channel awareness)
-    server_pulse = ""
-    if message.guild:
-        try:
-            summaries = await memory.get_channel_summaries(str(message.guild.id), exclude_channel_id=channel_id)
-            if summaries:
-                accessible = {
-                    str(ch.id) for ch in message.guild.text_channels if ch.permissions_for(message.author).read_messages
-                }
-                summaries = filter_by_permissions(summaries, accessible)
-                server_pulse = build_server_pulse(summaries, text)
-        except Exception:
-            log.exception("chat_server_pulse_failed", guild_id=str(message.guild.id))
+    server_pulse = await load_server_pulse(memory, message, channel_id, text)
 
     # --- Phase 1 (v3.0.0): pre-LLM disclosure scan ---
     disclosure = scan_disclosure(text)
