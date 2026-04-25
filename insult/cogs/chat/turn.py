@@ -30,7 +30,9 @@ from insult.cogs.chat.context import (
     load_facts_smart,
     load_other_participants_facts,
     load_server_pulse,
+    store_assistant_message,
     store_user_message,
+    summarize_user_images_into_text,
     update_style_profile,
 )
 from insult.cogs.chat.tasks import extract_user_facts
@@ -48,7 +50,6 @@ from insult.core.disclosure import scan_disclosure
 from insult.core.errors import classify_error, get_error_response
 from insult.core.facts import build_facts_prompt
 from insult.core.flows import ExpressionHistory, analyze_flows, build_flow_prompt, validate_flow_adherence
-from insult.core.image_summary import summarize_images
 from insult.core.llm import MEDICAL_WEB_SEARCH_TOOL, WEB_SEARCH_TOOL
 from insult.core.presets import PresetMode, PresetModifier
 from insult.core.reactions import add_reactions, parse_reactions, strip_reactions
@@ -113,31 +114,8 @@ async def run_turn(
 
     # Short text description of images so future turns can reference them
     # from SQLite-backed context (which stores only text).
-    text_for_memory = text
     image_blocks = [b for b in attachment_blocks if isinstance(b, dict) and b.get("type") == "image"]
-    if image_blocks:
-        summary_started = time.monotonic()
-        try:
-            summary = await summarize_images(
-                image_blocks,
-                client=llm.client,
-                model=settings.summary_model,
-            )
-            if summary:
-                text_for_memory = f"{text}\n[Imagen: {summary}]" if text else f"[Imagen: {summary}]"
-            log.info(
-                "image_summary_ok",
-                duration_ms=int((time.monotonic() - summary_started) * 1000),
-                image_count=len(image_blocks),
-                summary_len=len(summary or ""),
-                summary_preview=(summary or "")[:120],
-            )
-        except Exception:
-            log.exception(
-                "image_summary_wrapper_failed",
-                duration_ms=int((time.monotonic() - summary_started) * 1000),
-                image_count=len(image_blocks),
-            )
+    text_for_memory = await summarize_user_images_into_text(image_blocks, llm, settings.summary_model, text)
 
     guild_id = str(message.guild.id) if message.guild else None
     channel_name = message.channel.name if hasattr(message.channel, "name") else None
@@ -325,9 +303,10 @@ async def run_turn(
         notify_start = time.monotonic()
         try:
             await message.channel.send(get_error_response("retry_notice"))
-            log.info("retry_notice_sent", delivery_ms=int((time.monotonic() - notify_start) * 1000))
         except Exception:
             log.exception("retry_notice_send_failed", delivery_ms=int((time.monotonic() - notify_start) * 1000))
+            return
+        log.info("retry_notice_sent", delivery_ms=int((time.monotonic() - notify_start) * 1000))
 
     # --- LLM call ---
     llm_start = time.monotonic()
@@ -415,20 +394,17 @@ async def run_turn(
     # --- Persist response, update arc, extract stances ---
     clean_response = response.replace(MESSAGE_DELIMITER, "\n")
     if clean_response.strip():
-        try:
-            await memory.store(
-                channel_id,
-                str(bot.user.id),
-                bot.user.name,
-                "assistant",
-                clean_response,
-                for_user_id=user_id,
-                guild_id=guild_id,
-                channel_name=channel_name,
-                model_used=llm_response.model_used or None,
-            )
-        except Exception:
-            log.exception("chat_store_response_failed", channel_id=channel_id)
+        await store_assistant_message(
+            memory,
+            channel_id,
+            str(bot.user.id),
+            bot.user.name,
+            clean_response,
+            for_user_id=user_id,
+            guild_id=guild_id,
+            channel_name=channel_name,
+            model_used=llm_response.model_used or None,
+        )
 
     new_arc = update_arc(
         arc_state,
