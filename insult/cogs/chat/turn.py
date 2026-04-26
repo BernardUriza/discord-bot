@@ -47,7 +47,7 @@ from insult.core.character import (
 )
 from insult.core.delivery import MESSAGE_DELIMITER, send_response
 from insult.core.disclosure import scan_disclosure
-from insult.core.errors import classify_error, get_error_response
+from insult.core.errors import ErrorType, classify_error, get_error_response
 from insult.core.facts import build_facts_prompt
 from insult.core.flows import ExpressionHistory, analyze_flows, build_flow_prompt, validate_flow_adherence
 from insult.core.llm import MEDICAL_WEB_SEARCH_TOOL, WEB_SEARCH_TOOL
@@ -151,7 +151,7 @@ async def run_turn(
     context, recent = await build_context(memory, settings, channel_id, text, attachment_blocks)
     if context is None:
         log.warning("chat_turn_aborted", reason="context_failed")
-        await message.channel.send(get_error_response("context_failed"))
+        await message.channel.send(get_error_response(ErrorType.CONTEXT_FAILED))
         return "context_failed"
 
     log.info(
@@ -302,7 +302,7 @@ async def run_turn(
     async def _notify_retry():
         notify_start = time.monotonic()
         try:
-            await message.channel.send(get_error_response("retry_notice"))
+            await message.channel.send(get_error_response(ErrorType.RETRY_NOTICE))
         except Exception:
             log.exception("retry_notice_send_failed", delivery_ms=int((time.monotonic() - notify_start) * 1000))
             return
@@ -461,7 +461,7 @@ async def run_turn(
             final_len=len(response),
             tool_calls=len(llm_response.tool_calls),
         )
-        response = get_error_response("generic")
+        response = get_error_response(ErrorType.GENERIC)
 
     # --- Delivery ---
     has_side_effects = bool(reactions or llm_response.tool_calls)

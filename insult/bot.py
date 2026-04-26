@@ -14,7 +14,7 @@ from insult.core.backup import download_db, is_azure_configured, upload_db
 from insult.core.character import _get_current_time_context, strip_metadata
 from insult.core.debug_server import start_debug_server, stop_debug_server
 from insult.core.delivery import MESSAGE_DELIMITER, split_response
-from insult.core.errors import get_error_response
+from insult.core.errors import ErrorType, get_error_response
 from insult.core.guild_setup import post_reminder_delivered
 from insult.core.metrics import upload_dashboard_data
 from insult.core.proactive import (
@@ -422,7 +422,7 @@ def _build(container: Container):
             pass
         else:
             log.error("command_error", command=str(ctx.command), error=str(error), user=str(ctx.author))
-            await ctx.send(get_error_response("generic"))
+            await ctx.send(get_error_response(ErrorType.GENERIC))
 
     return bot
 

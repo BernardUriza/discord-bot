@@ -8,7 +8,7 @@ import discord
 import structlog
 from discord.ext import commands
 
-from insult.core.errors import get_error_response
+from insult.core.errors import ErrorType, get_error_response
 from insult.core.facts import extract_facts
 from insult.core.guild_setup import setup_guild
 
@@ -34,7 +34,7 @@ class UtilityCog(commands.Cog):
             profile = await self.memory.get_profile(user_id)
         except Exception:
             log.exception("perfil_failed", user_id=user_id)
-            await ctx.send(get_error_response("generic"))
+            await ctx.send(get_error_response(ErrorType.GENERIC))
             return
 
         if not profile.is_confident:
@@ -99,7 +99,7 @@ class UtilityCog(commands.Cog):
             )
         except Exception:
             log.exception("memoria_failed", channel_id=str(ctx.channel.id))
-            await ctx.send(get_error_response("generic"))
+            await ctx.send(get_error_response(ErrorType.GENERIC))
 
     @commands.command(name="buscar")
     @commands.cooldown(1, 10, commands.BucketType.user)
@@ -109,7 +109,7 @@ class UtilityCog(commands.Cog):
             results = await self.memory.search(str(ctx.channel.id), query, limit=10)
         except Exception:
             log.exception("buscar_failed", channel_id=str(ctx.channel.id), query=query)
-            await ctx.send(get_error_response("context_failed"))
+            await ctx.send(get_error_response(ErrorType.CONTEXT_FAILED))
             return
 
         if not results:
@@ -131,7 +131,7 @@ class UtilityCog(commands.Cog):
             user_facts = await self.memory.get_facts(user_id)
         except Exception:
             log.exception("facts_command_failed", user_id=user_id)
-            await ctx.send(get_error_response("generic"))
+            await ctx.send(get_error_response(ErrorType.GENERIC))
             return
 
         if not user_facts:
@@ -174,7 +174,7 @@ class UtilityCog(commands.Cog):
             user_data = await self.memory.get_all_user_messages(limit_per_user=30)
         except Exception:
             log.exception("syncfacts_get_messages_failed")
-            await ctx.send(get_error_response("generic"))
+            await ctx.send(get_error_response(ErrorType.GENERIC))
             return
 
         synced = 0
@@ -208,7 +208,7 @@ class UtilityCog(commands.Cog):
     async def setup(self, ctx: commands.Context):
         """Crea canales de sistema (facts + reminders) con formato cyberpunk."""
         if not ctx.guild:
-            await ctx.send(get_error_response("generic"))
+            await ctx.send(get_error_response(ErrorType.GENERIC))
             return
 
         # Check if already set up
@@ -233,4 +233,4 @@ class UtilityCog(commands.Cog):
             await ctx.send("No tengo permiso de **Manage Channels**. Daselo al bot y vuelve a intentar.")
         except Exception:
             log.exception("setup_failed", guild_id=str(ctx.guild.id))
-            await ctx.send(get_error_response("generic"))
+            await ctx.send(get_error_response(ErrorType.GENERIC))

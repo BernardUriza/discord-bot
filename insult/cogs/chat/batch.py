@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 import discord
 import structlog
 
-from insult.core.errors import get_error_response
+from insult.core.errors import ErrorType, get_error_response
 
 log = structlog.get_logger()
 
@@ -128,7 +128,7 @@ class BatchManager:
                 text_len=len(text),
                 limit=MAX_MESSAGE_LENGTH,
             )
-            await message.channel.send(get_error_response("too_long"))
+            await message.channel.send(get_error_response(ErrorType.TOO_LONG))
             return
 
         # Per-user cooldown: don't burn tokens on rapid-fire replies
