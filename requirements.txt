@@ -6,6 +6,9 @@ pydantic-settings>=2.1.0
 aiosqlite>=0.19.0
 structlog>=24.1.0
 typer>=0.9.0
+# Image compression before Claude vision API — modern phone cameras
+# routinely produce 5-12MB JPEGs that exceed the 5MB attachment cap.
+Pillow>=10.0.0
 
 # Azure (optional — for DB persistence)
 azure-storage-blob>=12.19.0

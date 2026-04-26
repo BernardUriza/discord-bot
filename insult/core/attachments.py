@@ -6,11 +6,20 @@ to Claude API content blocks (text, image, document).
 Each supported type has its own handler. Adding a new type means
 adding a handler class and registering it once — no edits to
 `process_attachment` or to the classifier.
+
+Image-size handling: phone cameras routinely produce 5-12 MB JPEGs that
+exceed Claude's 5 MB per-attachment cap. Rather than reject those, we
+attempt compression: resize to max-2048px on the long edge, save as
+JPEG at progressively lower quality (85→75→65→55) until the bytes fit.
+PNGs with transparency get flattened to white. Non-images and images
+that don't shrink below the cap after the lowest quality pass are still
+rejected with an in-character error.
 """
 
 from __future__ import annotations
 
 import base64
+import io
 from dataclasses import dataclass
 from enum import Enum
 from typing import ClassVar
@@ -19,7 +28,20 @@ import structlog
 
 log = structlog.get_logger()
 
-MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024  # 5MB
+MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024  # 5MB — Claude API per-attachment cap
+
+# Hard upper bound on what we even download. Beyond this, compression won't
+# salvage the file (and downloading 50 MB just to fail wastes egress).
+HARD_DOWNLOAD_LIMIT = 25 * 1024 * 1024  # 25MB
+
+# Compression target: long-edge pixel dimension after resize. 2048 keeps
+# enough fidelity for screenshots / photos without producing files that
+# blow past the 5 MB cap on the first pass.
+COMPRESS_LONG_EDGE = 2048
+
+# Quality steps we try in order. JPEG q=85 is visually lossless for most
+# inputs; we step down only if the previous pass still exceeded the cap.
+COMPRESS_QUALITY_STEPS = (85, 75, 65, 55)
 
 
 class AttachmentType(Enum):
@@ -191,9 +213,21 @@ def _handler_for(filename: str, content_type: str | None) -> _Handler | None:
 # ---------------------------------------------------------------------------
 
 
-def classify_attachment(filename: str, content_type: str | None, size: int) -> tuple[AttachmentType, str | None]:
-    """Classify a Discord attachment by type. Returns (type, error_or_none)."""
-    if size > MAX_ATTACHMENT_SIZE:
+def classify_attachment(
+    filename: str,
+    content_type: str | None,
+    size: int,
+    *,
+    enforce_size_limit: bool = True,
+) -> tuple[AttachmentType, str | None]:
+    """Classify a Discord attachment by type. Returns (type, error_or_none).
+
+    ``enforce_size_limit=True`` (default) keeps the legacy contract: anything
+    over 5 MB is UNSUPPORTED. ``process_attachment`` calls with
+    ``enforce_size_limit=False`` because images larger than 5 MB now go through
+    a compression pass before being rejected.
+    """
+    if enforce_size_limit and size > MAX_ATTACHMENT_SIZE:
         return AttachmentType.UNSUPPORTED, f"Archivo muy pesado ({size / 1024 / 1024:.1f}MB). Maximo 5MB."
 
     handler = _handler_for(filename, content_type)
@@ -204,18 +238,135 @@ def classify_attachment(filename: str, content_type: str | None, size: int) -> t
     return AttachmentType.UNSUPPORTED, f"No puedo leer archivos .{ext}. Mandame texto, codigo, imagenes o PDFs."
 
 
-async def process_attachment(attachment) -> ProcessedAttachment:
-    """Process a single discord.Attachment into a Claude API content block."""
-    filename = attachment.filename
-    att_type, error = classify_attachment(filename, attachment.content_type, attachment.size)
+def _compress_image(data: bytes, filename: str) -> tuple[bytes, str] | None:
+    """Resize + re-encode an oversize image so it fits under ``MAX_ATTACHMENT_SIZE``.
 
-    if error:
-        log.warning("attachment_rejected", filename=filename, reason=error)
+    Returns ``(compressed_bytes, jpeg_media_type)`` on success, or ``None`` if
+    even the lowest-quality JPEG pass still exceeds the cap. The resulting
+    bytes are always JPEG — even PNG/WebP inputs — because JPEG gives the
+    best size-vs-quality ratio for the photo/screenshot content that triggers
+    this path. Transparency is flattened to white.
+
+    GIFs are not compressed (animation would be lost); the caller still gets
+    None and reports the size to the user, who can convert manually.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        log.warning("attachment_pillow_missing", hint="pip install Pillow")
+        return None
+
+    ext = _get_extension(filename)
+    if ext == ".gif":
+        # Compressing animations to a single JPEG frame is worse than rejecting.
+        return None
+
+    try:
+        img = Image.open(io.BytesIO(data))
+        img.load()  # fully decode now so we surface format errors here
+    except Exception as e:
+        log.warning("attachment_compress_decode_failed", filename=filename, error=str(e))
+        return None
+
+    # Resize on the long edge if needed
+    long_edge = max(img.size)
+    if long_edge > COMPRESS_LONG_EDGE:
+        scale = COMPRESS_LONG_EDGE / long_edge
+        new_size = (int(img.size[0] * scale), int(img.size[1] * scale))
+        img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+    # Flatten transparency onto white — JPEG has no alpha.
+    if img.mode in ("RGBA", "LA", "P"):
+        background = Image.new("RGB", img.size, (255, 255, 255))
+        if img.mode == "P":
+            img = img.convert("RGBA")
+        background.paste(img, mask=img.split()[-1] if img.mode in ("RGBA", "LA") else None)
+        img = background
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+
+    # Try progressively lower JPEG quality until it fits
+    for quality in COMPRESS_QUALITY_STEPS:
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=quality, optimize=True)
+        compressed = buf.getvalue()
+        if len(compressed) <= MAX_ATTACHMENT_SIZE:
+            log.info(
+                "attachment_compressed",
+                filename=filename,
+                before=len(data),
+                after=len(compressed),
+                quality=quality,
+                final_dimensions=img.size,
+            )
+            return compressed, "image/jpeg"
+
+    log.warning(
+        "attachment_compress_exhausted",
+        filename=filename,
+        before=len(data),
+        last_quality=COMPRESS_QUALITY_STEPS[-1],
+    )
+    return None
+
+
+async def process_attachment(attachment) -> ProcessedAttachment:
+    """Process a single discord.Attachment into a Claude API content block.
+
+    Images exceeding ``MAX_ATTACHMENT_SIZE`` are compressed before being
+    rejected — see ``_compress_image``. Non-images and images that don't
+    fit even at the lowest JPEG quality fall through to the size-rejection
+    branch with an in-character error.
+    """
+    filename = attachment.filename
+
+    # Classify WITHOUT the size cap first — we need to know if it's an image
+    # to decide whether to attempt compression.
+    att_type, type_error = classify_attachment(
+        filename, attachment.content_type, attachment.size, enforce_size_limit=False
+    )
+
+    if type_error:
+        # Unsupported file type — never compressible regardless of size.
+        log.warning("attachment_rejected", filename=filename, reason=type_error)
         return ProcessedAttachment(
             attachment_type=att_type,
             filename=filename,
             content_block=None,
-            error=error,
+            error=type_error,
+        )
+
+    handler = _handler_for(filename, attachment.content_type)
+    if handler is None:
+        return ProcessedAttachment(
+            attachment_type=att_type,
+            filename=filename,
+            content_block=None,
+            error="Tipo de archivo no soportado.",
+        )
+
+    is_image = isinstance(handler, ImageHandler)
+
+    # Hard upper bound on what we even download.
+    if attachment.size > HARD_DOWNLOAD_LIMIT:
+        msg = f"Archivo muy pesado ({attachment.size / 1024 / 1024:.1f}MB). Maximo 25MB."
+        log.warning("attachment_rejected", filename=filename, reason=msg, size=attachment.size)
+        return ProcessedAttachment(
+            attachment_type=att_type,
+            filename=filename,
+            content_block=None,
+            error=msg,
+        )
+
+    # Non-images over the cap: no compression path, reject immediately.
+    if not is_image and attachment.size > MAX_ATTACHMENT_SIZE:
+        msg = f"Archivo muy pesado ({attachment.size / 1024 / 1024:.1f}MB). Maximo 5MB."
+        log.warning("attachment_rejected", filename=filename, reason=msg)
+        return ProcessedAttachment(
+            attachment_type=att_type,
+            filename=filename,
+            content_block=None,
+            error=msg,
         )
 
     try:
@@ -229,14 +380,21 @@ async def process_attachment(attachment) -> ProcessedAttachment:
             error="No pude descargar el archivo. Intentale de nuevo.",
         )
 
-    handler = _handler_for(filename, attachment.content_type)
-    if handler is None:
-        return ProcessedAttachment(
-            attachment_type=att_type,
-            filename=filename,
-            content_block=None,
-            error="Tipo de archivo no soportado.",
-        )
+    # Image compression path — only fires when the downloaded bytes exceed
+    # the cap. Images already under 5 MB skip this entirely (no quality loss).
+    forced_media_type: str | None = None
+    if is_image and len(data) > MAX_ATTACHMENT_SIZE:
+        result = _compress_image(data, filename)
+        if result is None:
+            msg = f"Imagen no se comprime lo suficiente ({len(data) / 1024 / 1024:.1f}MB). Mandala mas chica."
+            log.warning("attachment_compress_failed", filename=filename, original_size=len(data))
+            return ProcessedAttachment(
+                attachment_type=att_type,
+                filename=filename,
+                content_block=None,
+                error=msg,
+            )
+        data, forced_media_type = result
 
     block, build_error = handler.build_block(data, filename)
     if build_error or block is None:
@@ -246,6 +404,10 @@ async def process_attachment(attachment) -> ProcessedAttachment:
             content_block=None,
             error=build_error,
         )
+
+    # Override media_type when compression converted the format (PNG → JPEG).
+    if forced_media_type and isinstance(block.get("source"), dict):
+        block["source"]["media_type"] = forced_media_type
 
     log.info("attachment_processed", filename=filename, type=att_type.value, size=len(data))
     return ProcessedAttachment(attachment_type=att_type, filename=filename, content_block=block)
