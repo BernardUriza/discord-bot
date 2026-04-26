@@ -71,7 +71,14 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run pip-audit
-        run: pip-audit
+        # CVE-2026-3219 (GHSA-58qw-9mgm-455v): pip <= 26.0.1 treats concatenated
+        # tar+ZIP archives as ZIP regardless of filename. MEDIUM (CVSS 4.6).
+        # Disclosed 2026-04-20. GitHub Advisory API reports patched_versions=None
+        # as of 2026-04-26 — no upstream fix released. Threat model requires pip
+        # to install a maliciously-crafted ambiguous archive; CI only installs
+        # declared deps from PyPI, so the CVE isn't exploitable here.
+        # TODO: revisit 2026-05-15 — drop --ignore-vuln when pip publishes patch.
+        run: pip-audit --ignore-vuln CVE-2026-3219
 
   # --- Layer 4: Security — Static Code Analysis ---
   security-code:
