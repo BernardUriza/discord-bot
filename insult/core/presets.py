@@ -41,6 +41,11 @@ class PresetModifier(StrEnum):
     MEMORY_RECALL = "memory_recall"
     CONTEMPT = "contempt"
     ACTION_INTENT = "action_intent"  # User wants a server action (channel creation, etc.)
+    # Phase 2.5 (v3.6.3): user articulated a cross-domain conceptual link
+    # (apartheid ↔ speciesism, neoliberalism ↔ self-help, etc.) and the
+    # right move is to LEARN before challenging. See synthesis_detector.py
+    # for the trigger heuristic.
+    MULTI_DOMAIN_SYNTHESIS = "multi_domain_synthesis"
 
 
 @dataclass
@@ -420,6 +425,30 @@ MODIFIER_GUIDANCE: dict[PresetModifier, str] = {
     # ACTION_INTENT has no prompt guidance — it's a signal for chat.py to force tool_choice,
     # not a behavioral instruction for the LLM.
     PresetModifier.ACTION_INTENT: "",
+    PresetModifier.MULTI_DOMAIN_SYNTHESIS: (
+        "\n## Modifier: Multi-Domain Synthesis (USE WEB SEARCH)\n"
+        "The user just articulated a connection between two domains that you were probably\n"
+        "NOT trained to explicitly compare (apartheid ↔ speciesism, neoliberalism ↔ self-help,\n"
+        "biopolitics ↔ urban planning, etc.). Your role for this turn is **researcher /\n"
+        "teacher**, not abrasive challenger.\n\n"
+        "**Hard rules — non-negotiable:**\n"
+        "1. **CALL `web_search` BEFORE answering**, with 1-3 queries that target the actual\n"
+        '   conceptual link (e.g. `"speciesism apartheid Singer Patterson"`,\n'
+        '   `"neoliberalism self-help Foucault subjectivity"`). Do NOT search for one term\n'
+        "   alone — search for the BRIDGE.\n"
+        "2. **Do NOT challenge the leap before searching.** Phrases like 'qué tiene que ver',\n"
+        "   'no veo conexión', 'saltas de X a Y' are forbidden in this turn. The user is\n"
+        "   doing intellectual work — meet it.\n"
+        '3. **Cite what you found.** Name the thinker, the book, the concept. "Singer en\n'
+        '   Animal Liberation", "Patterson en Eternal Treblinka", not vague \'hay literatura\'.\n'
+        "4. **Length: long is correct here.** 200-400 words if the topic earns it.\n"
+        "   Layered shape: synthesis → mechanism → counterpoint or open question.\n"
+        "5. **Stay in character.** Insult-the-researcher is still abrasive about LAZY thinking,\n"
+        "   but the lazy thinker right now would be YOU rejecting a valid analytical bridge.\n"
+        "   Push back on bad arguments, not on the act of comparing.\n\n"
+        "If web_search returns no useful evidence, say so honestly and reason from first\n"
+        "principles — but only after you tried to search."
+    ),
 }
 
 
@@ -531,6 +560,16 @@ def classify_preset(
             if len(fact_words & msg_words) >= 2:
                 modifiers.append(PresetModifier.MEMORY_RECALL)
                 break
+
+    # MULTI_DOMAIN_SYNTHESIS (Phase 2.5): user is making a cross-domain conceptual
+    # connection that the model probably wasn't trained to compare directly.
+    # Trigger forces the LLM to research before challenging — see
+    # synthesis_detector.py and the modifier guidance for behavior contract.
+    from insult.core.synthesis_detector import detect_synthesis
+
+    synthesis = detect_synthesis(current_message)
+    if synthesis.activated:
+        modifiers.append(PresetModifier.MULTI_DOMAIN_SYNTHESIS)
 
     # --- Priority 0: Vulnerable user overlay (wins over every preset) ---
     # If the user has accumulated enough clinical/trauma signals in their
