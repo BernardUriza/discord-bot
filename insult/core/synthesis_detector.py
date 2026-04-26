@@ -52,9 +52,7 @@ _STRONG = [
     re.compile(
         r"(?i)\b([a-záéíóúñ]{4,}ismo)\s+(?:y|e|vs?\.?|and|versus)\s+(?:el\s+|la\s+|los\s+|las\s+|the\s+)?([a-záéíóúñ]{4,}ismo)\b"
     ),
-    re.compile(
-        r"(?i)\b([a-z]{3,}ism)\s+(?:and|vs?\.?|y)\s+(?:the\s+|el\s+|la\s+)?([a-z]{3,}ism)\b"
-    ),
+    re.compile(r"(?i)\b([a-z]{3,}ism)\s+(?:and|vs?\.?|y)\s+(?:the\s+|el\s+|la\s+)?([a-z]{3,}ism)\b"),
     # "discrimina(ción) ... ismo" or vice versa — cross-discrimination framing
     re.compile(r"(?i)\bdiscriminac?i[oó]n\s+\w*\s*(racial|de\s+especie|por\s+especie)\b"),
 ]
@@ -77,7 +75,9 @@ _WEAK = [
     # Citation-style framings — "como X argumenta", "según Y", "as Z says"
     # signal the user wants the bot to engage with named literature, not
     # opinion. Generic enough to apply across domains.
-    re.compile(r"(?i)\b(como|seg[uú]n|de acuerdo a|as|according to)\s+[A-Z][a-záéíóúñ]+\s+(argument|dice|escribe|sostiene|argues|writes|claims|points)"),
+    re.compile(
+        r"(?i)\b(como|seg[uú]n|de acuerdo a|as|according to)\s+[A-Z][a-záéíóúñ]+\s+(argument|dice|escribe|sostiene|argues|writes|claims|points)"
+    ),
 ]
 
 _COUNTERS = [
