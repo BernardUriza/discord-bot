@@ -60,6 +60,7 @@ class ConnectionManager:
         await self._create_reminders_table()
         await self._create_phase1_tables()
         await self._create_guild_config_table()
+        await self._create_consolidation_log_table()
 
         await self._db.commit()
 
@@ -161,9 +162,21 @@ class ConnectionManager:
         # conversation turn because save_facts DELETE'd all user_facts rows.
         with contextlib.suppress(aiosqlite.OperationalError):
             await self._db.execute("ALTER TABLE user_facts ADD COLUMN source TEXT NOT NULL DEFAULT 'auto'")
+        # Soft-delete column for the Mem0-style consolidator. NULL = live row;
+        # any non-NULL value is the unix timestamp at which the consolidator
+        # marked the row deleted. The 90-day hard-purge in
+        # memory_consolidator.py runs DELETE WHERE deleted_at < now()-90d so
+        # operators can still recover within the retention window.
+        with contextlib.suppress(aiosqlite.OperationalError):
+            await self._db.execute("ALTER TABLE user_facts ADD COLUMN deleted_at REAL DEFAULT NULL")
         await self._db.execute("""
             CREATE INDEX IF NOT EXISTS idx_user_facts
             ON user_facts(user_id)
+        """)
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_facts_deleted_at
+            ON user_facts(deleted_at)
+            WHERE deleted_at IS NOT NULL
         """)
 
     async def _create_world_scans_table(self) -> None:
@@ -301,6 +314,37 @@ class ConnectionManager:
                 reminders_channel_id TEXT,
                 setup_complete INTEGER NOT NULL DEFAULT 0
             )
+        """)
+
+    async def _create_consolidation_log_table(self) -> None:
+        """v3.6.0: audit trail for the Mem0-style fact consolidator.
+
+        Every ADD/UPDATE/DELETE/NOOP decision the consolidator makes lands
+        here so a future operator can answer "why did this fact disappear"
+        without re-running an LLM. Recovery within the 90-day soft-delete
+        window uses fact_id_before to look up the still-soft-deleted row.
+        """
+        assert self._db is not None
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS fact_consolidation_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_ts REAL NOT NULL,
+                user_id TEXT NOT NULL,
+                fact_id_before INTEGER,
+                fact_id_after INTEGER,
+                op TEXT NOT NULL CHECK(op IN ('ADD','UPDATE','DELETE','NOOP')),
+                reason TEXT,
+                fact_text_before TEXT,
+                fact_text_after TEXT
+            )
+        """)
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_fcl_run_ts
+            ON fact_consolidation_log(run_ts)
+        """)
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_fcl_user_id
+            ON fact_consolidation_log(user_id)
         """)
 
     async def _init_vectors(self) -> None:

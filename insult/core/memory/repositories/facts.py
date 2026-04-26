@@ -26,20 +26,29 @@ class FactsRepository(BaseRepository):
     """Owns the `user_facts` table. Semantic search integrates `core/vectors`."""
 
     async def get_facts(self, user_id: str) -> list[dict]:
-        """All facts for a user, newest-updated first."""
+        """All live facts for a user, newest-updated first.
+
+        Soft-deleted rows (`deleted_at IS NOT NULL`) are excluded — the
+        Mem0-style consolidator marks rows for delayed purge instead of
+        DELETE, so live SELECTs must filter them out.
+        """
         db = await self._conn()
         cursor = await db.execute(
-            "SELECT id, fact, category, updated_at FROM user_facts WHERE user_id = ? ORDER BY updated_at DESC",
+            "SELECT id, fact, category, updated_at FROM user_facts "
+            "WHERE user_id = ? AND deleted_at IS NULL "
+            "ORDER BY updated_at DESC",
             (user_id,),
         )
         rows = await cursor.fetchall()
         return [{"id": r[0], "fact": r[1], "category": r[2], "updated_at": r[3]} for r in rows]
 
     async def get_all_facts(self) -> list[dict]:
-        """Every fact for every user — used by cross-user prompt injection."""
+        """Every live fact for every user — used by cross-user prompt injection."""
         db = await self._conn()
         cursor = await db.execute(
-            "SELECT user_id, id, fact, category, updated_at FROM user_facts ORDER BY user_id, updated_at DESC",
+            "SELECT user_id, id, fact, category, updated_at FROM user_facts "
+            "WHERE deleted_at IS NULL "
+            "ORDER BY user_id, updated_at DESC",
         )
         rows = await cursor.fetchall()
         return [

@@ -104,5 +104,63 @@ def db_clean(
     asyncio.run(_clean())
 
 
+@app.command()
+def consolidate_facts(
+    user_id: str = typer.Option("", help="Limit to one user_id; empty = all users with facts"),
+    dry_run: bool = typer.Option(False, help="Compute the plan without applying it"),
+):
+    """Run the Mem0-style consolidator over user_facts (Phase 1, v3.6.0).
+
+    Scheduled to run every 2 days via Azure Container App job. Manual
+    invocation is fine for ad-hoc curation, dry-runs against prod, or
+    testing the LLM judge prompt without touching the DB.
+    """
+    import anthropic
+
+    from insult.config import settings
+    from insult.core.memory import MemoryStore
+    from insult.core.memory_consolidator import (
+        consolidate_all_users,
+        consolidate_user_facts,
+    )
+
+    async def _run():
+        store = MemoryStore(settings.db_path)
+        await store.connect()
+        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value())
+        try:
+            if user_id:
+                report = await consolidate_user_facts(
+                    user_id,
+                    memory=store,
+                    llm_client=client,
+                    model=settings.summary_model,
+                    dry_run=dry_run,
+                )
+                reports = [report]
+            else:
+                reports = await consolidate_all_users(
+                    memory=store,
+                    llm_client=client,
+                    model=settings.summary_model,
+                    dry_run=dry_run,
+                )
+        finally:
+            await store.close()
+        return reports
+
+    reports = asyncio.run(_run())
+    typer.echo(f"\n{'DRY RUN — ' if dry_run else ''}Consolidation report ({len(reports)} users)")
+    typer.echo("=" * 60)
+    for r in reports:
+        ops = r.counts_by_op()
+        typer.echo(
+            f"user={r.user_id}  in={r.facts_in:>3} out={r.facts_out:>3}  "
+            f"NOOP={ops['NOOP']:>2} DELETE={ops['DELETE']:>2} UPDATE={ops['UPDATE']:>2}  "
+            f"tokens={r.haiku_input_tokens}+{r.haiku_output_tokens}  "
+            f"{r.duration_ms}ms" + (f"  ERROR={r.error}" if r.error else "")
+        )
+
+
 if __name__ == "__main__":
     app()
