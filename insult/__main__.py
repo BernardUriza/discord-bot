@@ -114,10 +114,19 @@ def consolidate_facts(
     Scheduled to run every 2 days via Azure Container App job. Manual
     invocation is fine for ad-hoc curation, dry-runs against prod, or
     testing the LLM judge prompt without touching the DB.
+
+    When AZURE_STORAGE_CONNECTION_STRING is set (i.e. running in the
+    Azure Container App Job environment with an ephemeral disk), this
+    command downloads the live DB from blob storage before consolidating
+    and uploads the modified copy back at the end. The race-detection
+    in upload_db (skip_if_remote_newer=True) means a bot-write that
+    happened during consolidation will preserve the bot's version and
+    log a warning instead of clobbering the new messages.
     """
     import anthropic
 
     from insult.config import settings
+    from insult.core.backup import download_db, is_azure_configured, upload_db
     from insult.core.memory import MemoryStore
     from insult.core.memory_consolidator import (
         consolidate_all_users,
@@ -125,6 +134,14 @@ def consolidate_facts(
     )
 
     async def _run():
+        # Job execution context: pull the live DB from Azure Blob first so
+        # we don't operate on an empty ephemeral disk. Local dev (no
+        # AZURE_STORAGE_CONNECTION_STRING) skips the download and uses
+        # whatever's at settings.db_path.
+        downloaded = False
+        if is_azure_configured():
+            downloaded = await download_db(settings.db_path)
+
         store = MemoryStore(settings.db_path)
         await store.connect()
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value())
@@ -147,6 +164,17 @@ def consolidate_facts(
                 )
         finally:
             await store.close()
+
+        # Push the curated DB back to Blob Storage. Skipped on dry_run
+        # (nothing to upload) and when we're not in the Azure environment.
+        if downloaded and not dry_run:
+            uploaded = await upload_db(settings.db_path, skip_if_remote_newer=True)
+            if not uploaded:
+                log.warning(
+                    "consolidator_upload_skipped",
+                    reason="upload_db returned False — race with bot or upload failed",
+                )
+
         return reports
 
     reports = asyncio.run(_run())
