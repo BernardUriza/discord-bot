@@ -216,3 +216,49 @@ def build_adaptive_prompt(
         prompt += IDENTITY_REINFORCEMENT_SUFFIX
 
     return prompt, preset
+
+
+# ---------------------------------------------------------------------------
+# Post-build composition helpers
+# ---------------------------------------------------------------------------
+#
+# `build_adaptive_prompt` runs before the caller has computed flow_analysis,
+# arc_state, stances, etc. (some of those depend on the preset that this
+# function returns). Once those are ready, the caller stitches them onto
+# the prompt in turn.py. `compose_extra_layers` keeps that stitching
+# declarative — one named-arg per layer, empty blocks skipped — instead of
+# a chain of `if X: prompt += "\n\n" + X`.
+
+
+def _format_other_people_block(facts: dict[str, list[dict]]) -> str:
+    """Render the "Other People in This Channel" block (top 3 facts each)."""
+    parts = ["## Other People in This Channel (they are REAL — never say they don't exist)"]
+    for name, person_facts in facts.items():
+        fact_lines = ", ".join(f["fact"] for f in person_facts[:3])
+        parts.append(f"- {name}: {fact_lines}")
+    return "\n".join(parts)
+
+
+def compose_extra_layers(
+    base_prompt: str,
+    *,
+    flow_prompt: str = "",
+    arc_prompt: str = "",
+    stance_prompt: str = "",
+    facts_prompt: str = "",
+    other_participants_facts: dict[str, list[dict]] | None = None,
+) -> str:
+    """Append optional layers to a base system prompt, skipping empty blocks.
+
+    Each non-empty block is joined with ``\\n\\n``. ``facts_prompt`` may
+    arrive with its own leading newline pair (legacy quirk of
+    ``build_facts_prompt``); we ``lstrip`` to normalize so concatenation
+    never produces runs of three or more blank lines.
+    """
+    out = base_prompt
+    for block in (flow_prompt, arc_prompt, stance_prompt, facts_prompt):
+        if block:
+            out += "\n\n" + block.lstrip()
+    if other_participants_facts:
+        out += "\n\n" + _format_other_people_block(other_participants_facts)
+    return out

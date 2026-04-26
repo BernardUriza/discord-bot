@@ -41,7 +41,7 @@ from insult.core.character.formatting import (
     strip_lists,
     strip_metadata,
 )
-from insult.core.character.prompts import build_adaptive_prompt
+from insult.core.character.prompts import build_adaptive_prompt, compose_extra_layers
 from insult.core.character.time_context import _get_current_time_context
 
 __all__ = [
@@ -55,6 +55,7 @@ __all__ = [
     "IDENTITY_REINFORCE_THRESHOLD",
     "_get_current_time_context",
     "build_adaptive_prompt",
+    "compose_extra_layers",
     "deduplicate_opener",
     "detect_anti_patterns",
     "detect_break",

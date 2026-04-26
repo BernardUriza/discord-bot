@@ -41,6 +41,7 @@ from insult.core.arc_tracker import ArcState, arc_from_dict, arc_to_dict, build_
 from insult.core.attachments import process_attachments
 from insult.core.character import (
     build_adaptive_prompt,
+    compose_extra_layers,
     deduplicate_opener,
     enforce_length_variation,
     strip_echoed_quotes,
@@ -54,6 +55,7 @@ from insult.core.llm import MEDICAL_WEB_SEARCH_TOOL, WEB_SEARCH_TOOL
 from insult.core.presets import PresetMode, PresetModifier
 from insult.core.reactions import add_reactions, parse_reactions, strip_reactions
 from insult.core.routing import ModelTier, OpusBudget, select_model
+from insult.core.stance_log import build_stance_prompt
 from insult.core.triviality import is_trivial
 
 log = structlog.get_logger()
@@ -226,29 +228,16 @@ async def run_turn(
         elapsed_ms=_stage_elapsed(),
     )
 
-    flow_prompt = build_flow_prompt(flow_analysis)
-    if flow_prompt:
-        system_prompt += f"\n\n{flow_prompt}"
-
-    arc_prompt = build_arc_prompt(arc_state)
-    if arc_prompt:
-        system_prompt += f"\n\n{arc_prompt}"
     stances = await memory.get_stances(channel_id, user_id, limit=5)
-    if stances:
-        from insult.core.stance_log import build_stance_prompt
 
-        stance_prompt = build_stance_prompt(stances)
-        if stance_prompt:
-            system_prompt += f"\n\n{stance_prompt}"
-
-    system_prompt += build_facts_prompt(user_name, user_facts)
-
-    if other_participants_facts:
-        parts = ["## Other People in This Channel (they are REAL — never say they don't exist)"]
-        for name, facts in other_participants_facts.items():
-            fact_lines = ", ".join(f["fact"] for f in facts[:3])
-            parts.append(f"- {name}: {fact_lines}")
-        system_prompt += "\n\n" + "\n".join(parts)
+    system_prompt = compose_extra_layers(
+        system_prompt,
+        flow_prompt=build_flow_prompt(flow_analysis),
+        arc_prompt=build_arc_prompt(arc_state),
+        stance_prompt=build_stance_prompt(stances) if stances else "",
+        facts_prompt=build_facts_prompt(user_name, user_facts),
+        other_participants_facts=other_participants_facts,
+    )
 
     if profile and profile.is_confident:
         log.info(
