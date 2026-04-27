@@ -50,6 +50,16 @@ log = structlog.get_logger()
 # the table doesn't accumulate forever.
 SOFT_DELETE_RETENTION_SECONDS = 90 * 86400
 
+# Output cap for the judge LLM. The plan must reference every input
+# fact id in exactly one op (NOOP/DELETE/UPDATE), and each op carries a
+# short reason string — so output tokens scale linearly with input fact
+# count. The original 2048 cap silently truncated mid-JSON for users
+# with ≥80 facts (Alex/CPTSD case: 92 facts → judge_failed every run
+# from 2026-04-26 through 2026-04-27). Haiku 4.5 supports up to 8192
+# output tokens; 4x the original headroom covers ~300+ facts/user before
+# we'd need a chunking strategy.
+JUDGE_MAX_OUTPUT_TOKENS = 8192
+
 
 JUDGE_PROMPT = """\
 You are a memory curator for a long-term assistant. You will be given the \
@@ -196,18 +206,32 @@ async def _call_judge(
     model: str,
     facts: list[dict],
 ) -> tuple[list[dict] | None, int, int]:
-    """Single Haiku call. Returns (plan, input_tokens, output_tokens)."""
+    """Single Haiku call. Returns (plan, input_tokens, output_tokens).
+
+    Logs a warning when the response stop_reason is ``max_tokens`` —
+    that's the canary for "we need to bump JUDGE_MAX_OUTPUT_TOKENS or
+    chunk the input". Without it, truncation looks identical to a
+    normal model output to ``_parse_judge_response`` and surfaces only
+    as a downstream JSON parse failure.
+    """
     user_prompt = _build_user_prompt(facts)
     try:
         response = await client.messages.create(
             model=model,
-            max_tokens=2048,
+            max_tokens=JUDGE_MAX_OUTPUT_TOKENS,
             system=JUDGE_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
         )
     except (anthropic.APIError, anthropic.APIConnectionError) as e:
         log.warning("consolidator_judge_call_failed", error=str(e))
         return None, 0, 0
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        log.warning(
+            "consolidator_judge_truncated",
+            facts_in=len(facts),
+            output_tokens=response.usage.output_tokens,
+            max_tokens=JUDGE_MAX_OUTPUT_TOKENS,
+        )
     raw = response.content[0].text if response.content else ""
     plan = _parse_judge_response(raw)
     return plan, response.usage.input_tokens, response.usage.output_tokens
