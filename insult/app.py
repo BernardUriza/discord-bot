@@ -10,6 +10,7 @@ from discord.ext import commands
 from insult.config import Settings, settings
 from insult.core.llm import LLMClient
 from insult.core.memory import MemoryStore
+from insult.core.siesta import SiestaPoller
 
 
 @dataclass
@@ -20,6 +21,7 @@ class Container:
     memory: MemoryStore
     llm: LLMClient
     bot: commands.Bot
+    siesta: SiestaPoller
 
 
 def create_app() -> Container:
@@ -37,5 +39,6 @@ def create_app() -> Container:
         max_retries=settings.llm_max_retries,
         cure_model=settings.summary_model,  # Haiku for language cure (step 7c)
     )
+    siesta = SiestaPoller()
 
-    return Container(settings=settings, memory=memory, llm=llm, bot=bot)
+    return Container(settings=settings, memory=memory, llm=llm, bot=bot, siesta=siesta)

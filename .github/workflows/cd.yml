@@ -36,6 +36,18 @@ jobs:
             --resource-group insult-rg \
             --image insultacr.azurecr.io/insult-bot:${{ github.sha }}
 
+      - name: Update consolidator job image
+        # The fact-consolidation Container App Job runs from the SAME image
+        # as the bot but on a separate cron. Without this step the job stays
+        # pinned to whatever SHA was last manually pushed, and any feature
+        # that touches the consolidator (siesta marks, prompt changes,
+        # schema migrations) silently lags behind the bot.
+        run: |
+          az containerapp job update \
+            --name fact-consolidation \
+            --resource-group insult-rg \
+            --image insultacr.azurecr.io/insult-bot:${{ github.sha }}
+
       - name: Verify deployment health
         run: |
           echo "Waiting 30s for new revision to start..."

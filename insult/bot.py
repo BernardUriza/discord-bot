@@ -25,6 +25,7 @@ from insult.core.proactive import (
     should_world_scan,
 )
 from insult.core.reminders import compute_next_occurrence
+from insult.core.siesta.presence.discord import SiestaPresenceUpdater
 
 log = structlog.get_logger()
 
@@ -45,6 +46,7 @@ def _build(container: Container):
             _summarize_channels_task.cancel()
         if _backup_task.is_running():
             _backup_task.cancel()
+        await container.siesta.stop()
         if _debug_runner is not None:
             await stop_debug_server(_debug_runner)
         await memory.close()
@@ -379,6 +381,8 @@ def _build(container: Container):
             _summarize_channels_task.start()
             if is_azure_configured():
                 _backup_task.start()
+                container.siesta.add_listener(SiestaPresenceUpdater(bot))
+                container.siesta.start()
             # Debug server — only starts if token is set (fail-closed)
             debug_token = container.settings.debug_token.get_secret_value()
             if debug_token:

@@ -45,3 +45,10 @@ pip-audit                                       # security deps
 ## Python Version
 - Runtime: Python 3.14 (pinned in `.python-version`)
 - CI tests only on 3.14
+
+## Session Continuity — Don't Re-Litigate Priority
+- When the prior session has already identified a critical bug, regression, or load-bearing issue, the next turn STARTS work on it. Do not open a "what should we attack first?" menu, do not enumerate alternatives like `1. fix the critical / 2. commit WIP / 3. other`, and do not ask for permission to begin.
+- Surfacing options is bureaucratic friction when the priority is unambiguous. It signals lack of judgment and wastes the user's time.
+- Correct behavior: open with the plan, then execute. Show the plan AS you start the fix, not before. Use TaskCreate if multi-step.
+- The "what's next?" question is only legitimate when there is genuine priority ambiguity — multiple equally weighted critical items, no recent context, or an explicit user pivot. Otherwise, work.
+- This rule was registered after a `/work` invocation re-asked priority on a session that had just diagnosed a grave blob-download race condition losing longitudinal facts. The user's response was unambiguous: stop asking, start working.

@@ -461,6 +461,8 @@ async def consolidate_all_users(
     llm_client: anthropic.AsyncAnthropic,
     model: str,
     dry_run: bool = False,
+    write_diary: bool = True,
+    name_resolver: dict[str, str] | None = None,
 ) -> list[ConsolidationReport]:
     """Run consolidation across every user that has facts.
 
@@ -468,20 +470,81 @@ async def consolidate_all_users(
     rather than one batched call covering all users. Cost difference is
     ~$0.15/month total at current usage and the failure mode of a batch
     call is much harder to debug.
+
+    Siesta integration (v3.7.0): marks the bot's blob metadata at start,
+    after each user, and at the end. The bot replica polls that metadata
+    and silences itself while ``phase != awake`` to avoid mtime-collision
+    races on the shared blob. ``mark_finished`` runs in ``finally`` so a
+    crash can never leave the bot stuck asleep.
     """
+    from insult.core.siesta import (
+        SiestaPhase,
+        mark_finished,
+        mark_progress,
+        mark_started,
+    )
+    from insult.core.siesta.diary.generator import write_diary_for_run
+
     all_facts = await memory.get_all_facts()
     user_ids = sorted({f["user_id"] for f in all_facts})
     log.info("consolidator_run_started", users=len(user_ids), dry_run=dry_run)
 
-    reports: list[ConsolidationReport] = []
-    for uid in user_ids:
-        report = await consolidate_user_facts(uid, memory=memory, llm_client=llm_client, model=model, dry_run=dry_run)
-        reports.append(report)
+    started_at = await _siesta_start_marker(len(user_ids), dry_run, mark_started)
 
-    if not dry_run:
-        purged = await hard_purge_soft_deleted(memory)
-        log.info("consolidator_run_complete", users=len(reports), hard_purged=purged)
-    else:
-        log.info("consolidator_run_complete_dry", users=len(reports))
+    reports: list[ConsolidationReport] = []
+    try:
+        for idx, uid in enumerate(user_ids):
+            if started_at is not None and not dry_run:
+                await mark_progress(
+                    phase=SiestaPhase.LIGHT,
+                    started_at=started_at,
+                    total_users=len(user_ids),
+                    processed_users=idx,
+                    current_user_id=uid,
+                )
+            report = await consolidate_user_facts(
+                uid, memory=memory, llm_client=llm_client, model=model, dry_run=dry_run
+            )
+            reports.append(report)
+
+        if not dry_run:
+            if started_at is not None:
+                await mark_progress(
+                    phase=SiestaPhase.REM,
+                    started_at=started_at,
+                    total_users=len(user_ids),
+                    processed_users=len(user_ids),
+                )
+            purged = await hard_purge_soft_deleted(memory)
+            log.info("consolidator_run_complete", users=len(reports), hard_purged=purged)
+            if write_diary and reports:
+                await write_diary_for_run(
+                    reports,
+                    memory=memory,
+                    llm_client=llm_client,
+                    model=model,
+                    name_resolver=name_resolver,
+                )
+        else:
+            log.info("consolidator_run_complete_dry", users=len(reports))
+    finally:
+        if not dry_run:
+            await mark_finished()
 
     return reports
+
+
+async def _siesta_start_marker(total_users: int, dry_run: bool, mark_started_fn) -> object | None:
+    """Wrapper so ``mark_started`` only runs in real (non-dry) job mode.
+
+    Returns the started_at timestamp (UTC datetime) so per-user progress
+    calls can reference it without re-reading the blob. ``None`` means
+    "no marker placed" — happens on dry-run or when Azure isn't wired up
+    locally; either way the caller skips per-progress updates.
+    """
+    if dry_run:
+        return None
+    from datetime import UTC, datetime
+
+    placed = await mark_started_fn(total_users)
+    return datetime.now(UTC) if placed else None

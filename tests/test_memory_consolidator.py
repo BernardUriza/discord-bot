@@ -279,9 +279,14 @@ class TestConsolidateAllUsers:
 
         client.messages.create = AsyncMock(side_effect=_build_response)
 
-        reports = await consolidate_all_users(memory=store, llm_client=client, model="claude-haiku-4-5-20251001")
+        reports = await consolidate_all_users(
+            memory=store,
+            llm_client=client,
+            model="claude-haiku-4-5-20251001",
+            write_diary=False,
+        )
         assert len(reports) == 2
         assert {r.user_id for r in reports} == {"u1", "u2"}
         assert all(r.counts_by_op()["NOOP"] == 3 for r in reports)
-        # 2 users x 1 LLM call each
+        # 2 users x 1 LLM call each (diary disabled in this test)
         assert client.messages.create.await_count == 2

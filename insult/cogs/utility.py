@@ -24,6 +24,7 @@ class UtilityCog(commands.Cog):
         self.llm = container.llm
         self.settings = container.settings
         self.bot = container.bot
+        self.siesta = container.siesta
 
     @commands.command(name="perfil")
     @commands.cooldown(1, 10, commands.BucketType.user)
@@ -85,6 +86,44 @@ class UtilityCog(commands.Cog):
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def ping(self, ctx: commands.Context):
         await ctx.send(f"Pong! {round(self.bot.latency * 1000)}ms")
+
+    @commands.command(name="siesta")
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def siesta_command(self, ctx: commands.Context):
+        """Muestra el diario del último sueño y, si está dormido, su progreso."""
+        from insult.core.siesta.diary.storage import latest_entry
+
+        snapshot = self.siesta.get()
+        lines: list[str] = []
+        if snapshot.is_active:
+            elapsed_min = snapshot.elapsed_seconds // 60
+            elapsed_sec = snapshot.elapsed_seconds % 60
+            lines.append(
+                f"🛌 Estoy dormido — fase **{snapshot.phase.value}**, "
+                f"{snapshot.processed_users}/{snapshot.total_users} usuarios "
+                f"({snapshot.progress_pct}%), llevo {elapsed_min}m {elapsed_sec}s."
+            )
+            if snapshot.current_user_id:
+                lines.append(f"   Soñando con `{snapshot.current_user_id}` ahorita.")
+            lines.append("")
+
+        try:
+            entry = await latest_entry(self.memory)
+        except Exception:
+            log.exception("siesta_command_diary_failed")
+            entry = None
+
+        if entry is None:
+            lines.append("Todavia no tengo nada en el diario. La primera siesta llega pronto.")
+        else:
+            import time as _time
+
+            ago = max(0, int((_time.time() - entry.run_ts) / 60))
+            ago_str = f"hace {ago}m" if ago < 60 else f"hace {ago // 60}h {ago % 60}m"
+            lines.append(f"**Última siesta** ({ago_str}, duró {entry.duration_ms // 1000}s, status `{entry.status}`):")
+            lines.append(f"> {entry.content}")
+
+        await ctx.send("\n".join(lines))
 
     @commands.command(name="memoria")
     @commands.cooldown(1, 5, commands.BucketType.user)

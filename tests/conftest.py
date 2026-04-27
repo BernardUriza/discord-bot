@@ -91,13 +91,29 @@ def mock_bot():
 
 
 @pytest.fixture
-def mock_container(mock_settings, mock_memory, mock_llm, mock_bot):
+def mock_siesta():
+    """SiestaPoller stub fixed to AWAKE — chat tests assume the bot is awake.
+
+    Tests that need to exercise the siesta-skipped path can override
+    ``cog.siesta.is_active`` to return True directly.
+    """
+    from insult.core.siesta import AWAKE
+
+    siesta = MagicMock()
+    siesta.is_active = MagicMock(return_value=False)
+    siesta.get = MagicMock(return_value=AWAKE)
+    return siesta
+
+
+@pytest.fixture
+def mock_container(mock_settings, mock_memory, mock_llm, mock_bot, mock_siesta):
     """Full mocked DI container."""
     container = MagicMock()
     container.settings = mock_settings
     container.memory = mock_memory
     container.llm = mock_llm
     container.bot = mock_bot
+    container.siesta = mock_siesta
     return container
 
 

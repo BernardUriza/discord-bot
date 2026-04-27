@@ -1,5 +1,38 @@
 # Testing Rules
 
+## Verify Live Infra State Before Asserting — MANDATORY
+
+Before making any claim about how production infrastructure is configured — ingress
+exposure, env vars, secrets, blob state, deploy revision, container image tag,
+network policy, anything — run the live query first. `CLAUDE.md` and the files
+under `.claude/rules/` describe **intended** state at the moment they were written
+and rot silently as the user changes infra without updating the docs.
+
+**Do not** quote a doc as if it were current truth. **Do** run one read-only
+command and quote the actual output.
+
+| Question                              | Verify with                                                                                          |
+|---------------------------------------|------------------------------------------------------------------------------------------------------|
+| Is the debug endpoint exposed?        | `az containerapp show --name insult-bot --resource-group insult-rg --query properties.configuration.ingress` |
+| What env vars / secrets does prod have? | `az containerapp show --name insult-bot -g insult-rg --query "properties.template.containers[0].env"` |
+| What is the current deployed revision? | `az containerapp show ... --query properties.latestRevisionName`                                     |
+| What is in the backup blob right now? | `az storage blob show --account-name insultstorage --container-name insult-bot --name memory.db --query "{modified:properties.lastModified, size:properties.contentLength}"` |
+| What is the local file actually doing? | `Read` it. Do not paraphrase from memory.                                                            |
+| Is CI green / a PR merged?            | `gh run list`, `gh pr view`                                                                          |
+
+**Why this rule exists:** in an experimental production environment, the user
+changes infra faster than the docs. Asserting a stale claim once costs minutes;
+asserting it twice in the same session burns the user's trust and an hour of
+their day. A 30-second read-only command is always cheaper than a wrong claim.
+
+**If a doc and live state disagree, trust live state and update the doc** in the
+same turn (or flag the divergence). Never let a known-stale claim sit unfixed
+once you have observed the truth.
+
+This rule is the precondition to the diagnostic workflow further down (KQL first,
+debug endpoint for content). Diagnostic queries themselves are useless if you
+have already lied about how the system is wired.
+
 ## Pre-Push Verification — MANDATORY
 
 Before EVERY push, verify that code actually works at the Python import level, not just at the lint/test level:
@@ -58,7 +91,7 @@ curl -s "http://localhost:8787/debug/channels?guild_id=99999&since_hours=24" \
 
 ### Notes
 - Read-only — no write paths
-- In Azure Container Apps: private by default (no ingress configured)
+- In Azure Container Apps: **publicly reachable** at `https://insult-bot.nicecliff-10074f57.eastus.azurecontainerapps.io` (external ingress targets port 8787). Bearer token from Azure secret `debug-token` is the only protection — verify with `az containerapp show -n insult-bot -g insult-rg --query properties.configuration.ingress` before claiming otherwise
 - Uses `hmac.compare_digest` for timing-safe token comparison
 - For local testing, bot must be running (`python -m insult run`)
 

@@ -44,6 +44,7 @@ class ChatCog(commands.Cog):
         self.llm = container.llm
         self.settings = container.settings
         self.bot = container.bot
+        self.siesta = container.siesta
         self._background_tasks: set[asyncio.Task] = set()
         self._expression_history = ExpressionHistory()
         self._batches = BatchManager()
@@ -99,6 +100,9 @@ class ChatCog(commands.Cog):
         )
         outcome = "unknown"
         try:
+            if self.siesta.is_active():
+                outcome = await self._handle_siesta_turn(message, text)
+                return
             outcome = await run_turn(
                 message,
                 text,
@@ -123,3 +127,36 @@ class ChatCog(commands.Cog):
                 total_ms=int((time.monotonic() - turn_start) * 1000),
             )
             structlog.contextvars.unbind_contextvars("request_id", "channel_id", "user_id")
+
+    async def _handle_siesta_turn(self, message: discord.Message, text: str) -> str:
+        """Persist the user's message + react 🛌 + skip the LLM.
+
+        Called when ``siesta.is_active()`` — i.e. the consolidator job is
+        currently writing to the shared blob. Responding here would race
+        the consolidator's upload AND burn tokens against state that's
+        about to be replaced. We acknowledge with a reaction so the user
+        knows the message was seen, and let the upload-side fix in
+        :mod:`insult.core.backup` keep the data path safe.
+        """
+        snapshot = self.siesta.get()
+        try:
+            await self.memory.store(
+                str(message.channel.id),
+                str(message.author.id),
+                message.author.display_name,
+                "user",
+                text,
+            )
+        except Exception:
+            log.exception("siesta_skipped_store_failed")
+        try:
+            await message.add_reaction("🛌")
+        except Exception:
+            log.debug("siesta_skipped_reaction_failed")
+        log.info(
+            "siesta_skipped_turn",
+            phase=snapshot.phase.value,
+            progress_pct=snapshot.progress_pct,
+            current_user=snapshot.current_user_id,
+        )
+        return f"siesta:{snapshot.phase.value}"

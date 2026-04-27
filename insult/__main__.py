@@ -156,11 +156,15 @@ def consolidate_facts(
                 )
                 reports = [report]
             else:
+                # Build user_id → display name map for the dream diary.
+                # Falls back to user_id if the user has never sent a message.
+                name_resolver = await _resolve_user_names(store)
                 reports = await consolidate_all_users(
                     memory=store,
                     llm_client=client,
                     model=settings.summary_model,
                     dry_run=dry_run,
+                    name_resolver=name_resolver,
                 )
         finally:
             await store.close()
@@ -188,6 +192,26 @@ def consolidate_facts(
             f"tokens={r.haiku_input_tokens}+{r.haiku_output_tokens}  "
             f"{r.duration_ms}ms" + (f"  ERROR={r.error}" if r.error else "")
         )
+
+
+async def _resolve_user_names(store) -> dict[str, str]:
+    """Map user_id → most recent user_name from the messages table.
+
+    The dream diary reads better with names ("Alex", "Bernard") than with
+    Discord snowflake ids. Querying ``messages`` is dirt-cheap (indexed)
+    and we only need the latest known name per user.
+    """
+    db = store._db
+    if db is None:
+        return {}
+    cursor = await db.execute(
+        "SELECT user_id, user_name FROM messages "
+        "WHERE id IN ("
+        "  SELECT MAX(id) FROM messages WHERE role = 'user' GROUP BY user_id"
+        ")"
+    )
+    rows = await cursor.fetchall()
+    return {row[0]: row[1] for row in rows}
 
 
 if __name__ == "__main__":

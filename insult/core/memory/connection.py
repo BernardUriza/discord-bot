@@ -61,6 +61,7 @@ class ConnectionManager:
         await self._create_phase1_tables()
         await self._create_guild_config_table()
         await self._create_consolidation_log_table()
+        await self._create_dream_diary_table()
 
         await self._db.commit()
 
@@ -345,6 +346,38 @@ class ConnectionManager:
         await self._db.execute("""
             CREATE INDEX IF NOT EXISTS idx_fcl_user_id
             ON fact_consolidation_log(user_id)
+        """)
+
+    async def _create_dream_diary_table(self) -> None:
+        """In-character narrative log of consolidator runs.
+
+        One row per run, written by the consolidator job at the end of
+        each scheduled invocation. Surfaced to operators via the
+        ``!siesta`` chat command and the ``/debug/dreams`` HTTP endpoint.
+        Entries are intentionally short and read like Insult wrote them
+        — they are NOT structured data; the structured per-user counts
+        live in ``fact_consolidation_log``.
+        """
+        assert self._db is not None
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS dream_diary (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_ts REAL NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                users_total INTEGER NOT NULL,
+                users_processed INTEGER NOT NULL,
+                facts_in_total INTEGER NOT NULL,
+                facts_out_total INTEGER NOT NULL,
+                deletes_total INTEGER NOT NULL,
+                updates_total INTEGER NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('ok','partial','failed')),
+                content TEXT NOT NULL,
+                error TEXT
+            )
+        """)
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_dream_diary_run_ts
+            ON dream_diary(run_ts DESC)
         """)
 
     async def _init_vectors(self) -> None:

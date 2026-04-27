@@ -26,10 +26,105 @@ BLOB_NAME = "memory.db"
 # refreshes this after a successful write; shutdown compares against it.
 _last_known_blob_mtime: datetime | None = None
 
+# Tracks the remote mtime observed during the previous upload attempt that was
+# aborted because the remote looked newer. If the next attempt sees the same
+# mtime, the writer that "won" the race is gone (the blob has been stable for
+# at least one interval) and we can safely adopt their mtime as our baseline.
+# Without this, a single write by a dying replacement permanently freezes
+# uploads from this container until restart.
+_last_observed_remote_mtime: datetime | None = None
+
 
 def is_azure_configured() -> bool:
     """Check if Azure Blob Storage credentials are available."""
     return bool(os.environ.get("AZURE_STORAGE_CONNECTION_STRING"))
+
+
+def should_unstick_baseline(
+    current_remote_mtime: datetime | None,
+    last_observed_remote_mtime: datetime | None,
+) -> bool:
+    """Whether to adopt the current remote mtime as our new baseline.
+
+    Pure function so the recovery policy can be unit-tested without the SDK.
+    Returns True only when the blob's last_modified is identical to what we
+    observed during the previous aborted upload — i.e. it has been stable
+    for at least one full backup interval, so any competing writer is gone.
+
+    A single observation is not enough: on the very first abort we have no
+    prior observation, so we must wait one more cycle before unsticking.
+    """
+    if current_remote_mtime is None or last_observed_remote_mtime is None:
+        return False
+    return current_remote_mtime == last_observed_remote_mtime
+
+
+def count_authoritative_rows(db_path: Path) -> dict[str, int]:
+    """Return row counts for the tables that hold longitudinal user data.
+
+    Pure on inputs (just opens the file read-only) so it can be unit-tested
+    against synthetic SQLite files without azure-storage-blob installed.
+    Returns 0 for any table that is missing — a brand-new container's
+    freshly initialized DB might be missing rarely-used tables in transit,
+    and a missing table is informationally equivalent to "no rows" for the
+    purpose of the richness comparison.
+
+    Tables counted: `messages` (append-only conversation memory) and
+    `user_facts` (extracted facts that drive the vulnerability overlay).
+    These are the load-bearing tables — losing them is the failure mode
+    we are guarding against. We deliberately ignore derived tables
+    (summaries, consolidation_log, scans) because they can be regenerated.
+    """
+    import sqlite3
+
+    counts = {"messages": 0, "user_facts": 0}
+    if not db_path.exists():
+        return counts
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            for table in counts:
+                try:
+                    cur = conn.execute(f"SELECT COUNT(*) FROM {table}")  # noqa: S608 — table names are constants above
+                    row = cur.fetchone()
+                    counts[table] = int(row[0]) if row else 0
+                except sqlite3.OperationalError:
+                    counts[table] = 0
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError:
+        return counts
+    return counts
+
+
+def should_force_overwrite(
+    local_counts: dict[str, int],
+    remote_counts: dict[str, int],
+) -> bool:
+    """Whether a richer local DB justifies overwriting a strictly-newer remote.
+
+    Pure function. Returns True only when the local DB is comprehensively
+    richer than the remote — i.e. local has at least one of {messages,
+    user_facts} with strictly more rows, AND no authoritative table where
+    local has fewer rows than remote. This second clause is the safety
+    valve: if remote has facts we don't have, an operator (or another
+    writer) added them; we should NOT clobber.
+
+    Distinguishes the two contradictory race scenarios:
+    - Operator-pushed fresh blob (2026-04-21): local has 3 facts, remote
+      has 16 facts → local NOT richer → abort (existing behaviour).
+    - Long-running rich container (2026-04-27): local has 92 facts, remote
+      has 4 facts → local strictly richer → force overwrite (new path).
+    """
+    has_strict_gain = False
+    for table in ("messages", "user_facts"):
+        local = int(local_counts.get(table, 0))
+        remote = int(remote_counts.get(table, 0))
+        if local < remote:
+            return False
+        if local > remote:
+            has_strict_gain = True
+    return has_strict_gain
 
 
 def should_abort_upload(
@@ -141,7 +236,7 @@ async def upload_db(db_path: Path, *, skip_if_remote_newer: bool = True) -> bool
 
     Returns True if uploaded, False if not configured, failed, or skipped.
     """
-    global _last_known_blob_mtime
+    global _last_known_blob_mtime, _last_observed_remote_mtime
 
     if not is_azure_configured():
         return False
@@ -183,14 +278,61 @@ async def upload_db(db_path: Path, *, skip_if_remote_newer: bool = True) -> bool
                     _last_known_blob_mtime,
                     skip_if_remote_newer=True,
                 ):
-                    log.warning(
-                        "azure_upload_aborted_remote_newer",
-                        last_known=_last_known_blob_mtime.isoformat(),
-                        current=current_mtime.isoformat() if current_mtime else None,
-                        reason="remote was updated by another writer (likely the replacement container)",
-                    )
-                    snapshot_path.unlink(missing_ok=True)
-                    return False
+                    # Before aborting, check if the local snapshot is richer
+                    # than the remote. Distinguishes operator-pushed-fresh
+                    # (local stale → abort) from long-running-rich-container
+                    # (local rich → force overwrite). See should_force_overwrite
+                    # for the policy.
+                    remote_check_path = db_path.parent / "memory_remote_check.db"
+                    forced = False
+                    try:
+                        try:
+                            stream = await blob.download_blob()
+                            remote_bytes = await stream.readall()
+                            remote_check_path.write_bytes(remote_bytes)
+                            local_counts = count_authoritative_rows(snapshot_path)
+                            remote_counts = count_authoritative_rows(remote_check_path)
+                            if should_force_overwrite(local_counts, remote_counts):
+                                log.warning(
+                                    "azure_upload_force_overwrite_richer_local",
+                                    last_known=_last_known_blob_mtime.isoformat(),
+                                    current=current_mtime.isoformat() if current_mtime else None,
+                                    local_counts=local_counts,
+                                    remote_counts=remote_counts,
+                                    reason="local DB is comprehensively richer; remote-newer abort would lose data",
+                                )
+                                _last_observed_remote_mtime = None
+                                forced = True
+                        except Exception:
+                            log.exception("azure_upload_richness_check_failed")
+                    finally:
+                        remote_check_path.unlink(missing_ok=True)
+
+                    if not forced:
+                        if current_mtime is not None and should_unstick_baseline(
+                            current_mtime, _last_observed_remote_mtime
+                        ):
+                            log.info(
+                                "azure_upload_freshness_unstuck",
+                                last_known=_last_known_blob_mtime.isoformat(),
+                                stable_remote=current_mtime.isoformat(),
+                                reason="remote unchanged across two consecutive checks — race window over",
+                            )
+                            _last_known_blob_mtime = current_mtime
+                            _last_observed_remote_mtime = None
+                        else:
+                            _last_observed_remote_mtime = current_mtime
+                            log.warning(
+                                "azure_upload_aborted_remote_newer",
+                                last_known=_last_known_blob_mtime.isoformat(),
+                                current=current_mtime.isoformat() if current_mtime else None,
+                                reason="remote was updated by another writer (likely the replacement container)",
+                            )
+                            snapshot_path.unlink(missing_ok=True)
+                            return False
+                else:
+                    # Remote is at-or-behind our baseline; no race signal pending.
+                    _last_observed_remote_mtime = None
 
             data = snapshot_path.read_bytes()
             resp = await blob.upload_blob(data, overwrite=True)
